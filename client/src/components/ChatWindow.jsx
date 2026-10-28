@@ -167,6 +167,7 @@ export default function ChatWindow({ activePeer }) {
   const [typingPeers, setTypingPeers] = useState(new Set())
   const [onlinePeers, setOnlinePeers] = useState(new Set())
   const [showSecurityModal, setShowSecurityModal] = useState(false)
+  const [showClearModal, setShowClearModal] = useState(false)
   
   // Persistent outbox for queued messages to offline peers
   const [outbox, setOutbox] = useState(() => {
@@ -207,34 +208,57 @@ export default function ChatWindow({ activePeer }) {
 
   // Track online peers & auto-flush outbox when peer comes online
   useEffect(() => {
+    const flushToPeer = (targetPeerId) => {
+      setOutbox((prevOutbox) => {
+        const pending = prevOutbox[targetPeerId] || []
+        if (pending.length > 0) {
+          console.log(`[Outbox] Flushing ${pending.length} message(s) to ${targetPeerId}`)
+          pending.forEach((msg) => {
+            wsClient.send('CHAT_MESSAGE', { to: targetPeerId, text: msg.text, id: msg.id })
+          })
+        }
+        return prevOutbox
+      })
+    }
+
     const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
       if (!peer) return
       setOnlinePeers((prev) => new Set(prev).add(peer.id))
+      flushToPeer(peer.id)
+    })
 
-      // Check if there are queued outbox messages waiting to be sent to this peer!
-      setOutbox((prevOutbox) => {
-        const pending = prevOutbox[peer.id] || []
-        if (pending.length > 0) {
-          console.log(`[Outbox] Auto-flushing ${pending.length} message(s) to ${peer.id}`)
-          pending.forEach((msg) => {
-            wsClient.send('CHAT_MESSAGE', { to: peer.id, text: msg.text })
-          })
+    const unsubConnected = wsClient.on(WS_EVENT.PEER_CONNECTED, ({ peer }) => {
+      if (!peer) return
+      setOnlinePeers((prev) => new Set(prev).add(peer.id))
+      flushToPeer(peer.id)
+    })
 
-          // Mark status as 'sent' in message history
-          setMessages((prevMsgs) => {
-            const peerMsgs = prevMsgs[peer.id] || []
-            const pendingIds = new Set(pending.map((m) => m.id))
-            return {
-              ...prevMsgs,
-              [peer.id]: peerMsgs.map((m) => (pendingIds.has(m.id) ? { ...m, status: 'sent' } : m)),
+    const unsubSent = wsClient.on(WS_EVENT.MESSAGE_SENT, ({ to, id, text }) => {
+      // Mark message status as 'sent' (✓) in chat history
+      setMessages((prevMsgs) => {
+        const peerMsgs = prevMsgs[to] || []
+        return {
+          ...prevMsgs,
+          [to]: peerMsgs.map((m) => {
+            if ((id && m.id === id) || (m.status === 'pending' && m.text === text)) {
+              return { ...m, status: 'sent' }
             }
-          })
-
-          const next = { ...prevOutbox }
-          delete next[peer.id]
-          return next
+            return m
+          }),
         }
-        return prevOutbox
+      })
+
+      // Remove from outbox
+      setOutbox((prevOutbox) => {
+        const peerPending = prevOutbox[to] || []
+        const remaining = peerPending.filter((m) => (id ? m.id !== id : m.text !== text))
+        const next = { ...prevOutbox }
+        if (remaining.length > 0) {
+          next[to] = remaining
+        } else {
+          delete next[to]
+        }
+        return next
       })
     })
 
@@ -248,6 +272,8 @@ export default function ChatWindow({ activePeer }) {
 
     return () => {
       unsubAnnounce()
+      unsubConnected()
+      unsubSent()
       unsubOffline()
     }
   }, [])
@@ -346,6 +372,23 @@ export default function ChatWindow({ activePeer }) {
     }, 2000)
   }
 
+  function handleClearChat() {
+    if (!peerId) return
+    setMessages((prev) => {
+      const next = { ...prev }
+      delete next[peerId]
+      localStorage.setItem('locallink_chats', JSON.stringify(next))
+      return next
+    })
+    setOutbox((prev) => {
+      const next = { ...prev }
+      delete next[peerId]
+      localStorage.setItem('locallink_outbox', JSON.stringify(next))
+      return next
+    })
+    setShowClearModal(false)
+  }
+
   function handleSend() {
     const text = inputValue.trim()
     if (!text || !peerId) return
@@ -356,16 +399,13 @@ export default function ChatWindow({ activePeer }) {
       wsClient.send('TYPING_STOP', { to: peerId })
     }
 
-    const currentOnline = onlinePeers.has(peerId)
-    const status = currentOnline ? 'sent' : 'pending'
-
     const msg = {
       from: 'me',
       to: peerId,
       text,
       ts: Date.now(),
       id: `me-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      status,
+      status: 'pending',
     }
 
     // Optimistically add to messages
@@ -374,16 +414,14 @@ export default function ChatWindow({ activePeer }) {
       [peerId]: [...(prev[peerId] || []), msg],
     }))
 
-    if (!currentOnline) {
-      // Buffer in outbox
-      setOutbox((prev) => ({
-        ...prev,
-        [peerId]: [...(prev[peerId] || []), msg],
-      }))
-    }
+    // Buffer in outbox until confirmed sent
+    setOutbox((prev) => ({
+      ...prev,
+      [peerId]: [...(prev[peerId] || []), msg],
+    }))
 
-    // Always deliver to backend proxy (which sends or buffers)
-    wsClient.send('CHAT_MESSAGE', { to: peerId, text })
+    // Deliver to backend proxy with msg.id
+    wsClient.send('CHAT_MESSAGE', { to: peerId, text, id: msg.id })
     setInputValue('')
   }
 
@@ -573,15 +611,32 @@ export default function ChatWindow({ activePeer }) {
             )}
           </div>
 
-          <button
-            onClick={() => setShowSecurityModal(true)}
-            className="btn btn-ghost btn-sm"
-            title="Inspect End-to-End Encryption Details"
-            style={{ gap: 5, padding: '3px 8px', fontSize: '0.7rem' }}
-          >
-            <span className="badge badge-accent" style={{ fontSize: '0.65rem' }}>E2EE</span>
-            <span style={{ color: 'var(--color-text-muted)' }}>Verified 🔒</span>
-          </button>
+          <div className="flex-center gap-2">
+            <button
+              id="clear-chat-btn"
+              onClick={() => setShowClearModal(true)}
+              className="btn btn-ghost btn-icon btn-sm"
+              title={`Clear chat history with ${activePeer.name}`}
+              style={{ width: 30, height: 30, color: 'var(--color-text-muted)' }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => setShowSecurityModal(true)}
+              className="btn btn-ghost btn-sm"
+              title="Inspect End-to-End Encryption Details"
+              style={{ gap: 5, padding: '3px 8px', fontSize: '0.7rem' }}
+            >
+              <span className="badge badge-accent" style={{ fontSize: '0.65rem' }}>E2EE</span>
+              <span style={{ color: 'var(--color-text-muted)' }}>Verified 🔒</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -771,6 +826,60 @@ export default function ChatWindow({ activePeer }) {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Clear Chat Confirmation Modal ──────────────────────── */}
+      {showClearModal && activePeer && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowClearModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 16,
+          }}
+        >
+          <div
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 360,
+              maxWidth: '92vw',
+              background: 'var(--color-bg-surface)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              padding: 20,
+              boxShadow: 'var(--shadow-lg)',
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--color-text-primary)', marginBottom: 8 }}>
+              Clear Chat History?
+            </div>
+            <p style={{ fontSize: '0.8125rem', color: 'var(--color-text-muted)', lineHeight: 1.5, marginBottom: 18 }}>
+              Are you sure you want to delete all messages with <strong>{activePeer.name}</strong>? This only removes messages on this device and cannot be undone.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowClearModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                id="confirm-clear-btn"
+                className="btn btn-danger btn-sm"
+                onClick={handleClearChat}
+              >
+                Clear Chat
+              </button>
+            </div>
           </div>
         </div>
       )}
