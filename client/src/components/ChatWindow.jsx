@@ -1,7 +1,7 @@
 /**
  * ChatWindow.jsx
  * Main chat area with minimal aesthetic, E2EE security inspector modal,
- * 50MB file size limit, and audio notification chime.
+ * 50MB file size limit, audio notification chime, and store-and-forward outbox queue.
  */
 import { useEffect, useRef, useState } from 'react'
 import wsClient, { WS_EVENT } from '../services/wsClient'
@@ -29,6 +29,8 @@ function playNotificationChime() {
 }
 
 function MessageBubble({ msg, isMine }) {
+  const isPending = msg.status === 'pending'
+
   return (
     <div
       style={{
@@ -48,6 +50,7 @@ function MessageBubble({ msg, isMine }) {
           border: isMine
             ? '1px solid transparent'
             : '1px solid var(--color-border)',
+          opacity: isPending ? 0.85 : 1,
         }}
       >
         <p
@@ -73,7 +76,18 @@ function MessageBubble({ msg, isMine }) {
           }}
         >
           <span>{formatTime(msg.ts)}</span>
-          {isMine && <span title="Delivered via encrypted TCP">✓</span>}
+          {isMine && (
+            isPending ? (
+              <span
+                title="Queued offline — will deliver automatically when peer reconnects"
+                style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center' }}
+              >
+                🕒
+              </span>
+            ) : (
+              <span title="Delivered via encrypted TCP">✓</span>
+            )
+          )}
         </div>
       </div>
     </div>
@@ -141,11 +155,29 @@ function EmptyChat({ peerName }) {
 }
 
 export default function ChatWindow({ activePeer }) {
-  const [messages, setMessages] = useState({}) // { [peerId]: Message[] }
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('locallink_chats')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
   const [inputValue, setInputValue] = useState('')
   const [typingPeers, setTypingPeers] = useState(new Set())
+  const [onlinePeers, setOnlinePeers] = useState(new Set())
   const [showSecurityModal, setShowSecurityModal] = useState(false)
   
+  // Persistent outbox for queued messages to offline peers
+  const [outbox, setOutbox] = useState(() => {
+    try {
+      const saved = localStorage.getItem('locallink_outbox')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const typingTimeoutRef = useRef(null)
@@ -154,18 +186,7 @@ export default function ChatWindow({ activePeer }) {
   const peerId = activePeer?.id
   const peerMessages = (peerId && messages[peerId]) || []
   const isPeerTyping = peerId && typingPeers.has(peerId)
-
-  // 1. Load chats from local storage
-  useEffect(() => {
-    const saved = localStorage.getItem('locallink_chats')
-    if (saved) {
-      try {
-        setMessages(JSON.parse(saved))
-      } catch (err) {
-        console.error('Failed to parse chats from local storage', err)
-      }
-    }
-  }, [])
+  const isPeerOnline = peerId ? onlinePeers.has(peerId) : false
 
   // 2. Save chats to local storage
   useEffect(() => {
@@ -174,10 +195,62 @@ export default function ChatWindow({ activePeer }) {
     }
   }, [messages])
 
+  // 3. Save outbox queue to local storage
+  useEffect(() => {
+    localStorage.setItem('locallink_outbox', JSON.stringify(outbox))
+  }, [outbox])
+
   // Scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [peerMessages.length, isPeerTyping])
+
+  // Track online peers & auto-flush outbox when peer comes online
+  useEffect(() => {
+    const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
+      if (!peer) return
+      setOnlinePeers((prev) => new Set(prev).add(peer.id))
+
+      // Check if there are queued outbox messages waiting to be sent to this peer!
+      setOutbox((prevOutbox) => {
+        const pending = prevOutbox[peer.id] || []
+        if (pending.length > 0) {
+          console.log(`[Outbox] Auto-flushing ${pending.length} message(s) to ${peer.id}`)
+          pending.forEach((msg) => {
+            wsClient.send('CHAT_MESSAGE', { to: peer.id, text: msg.text })
+          })
+
+          // Mark status as 'sent' in message history
+          setMessages((prevMsgs) => {
+            const peerMsgs = prevMsgs[peer.id] || []
+            const pendingIds = new Set(pending.map((m) => m.id))
+            return {
+              ...prevMsgs,
+              [peer.id]: peerMsgs.map((m) => (pendingIds.has(m.id) ? { ...m, status: 'sent' } : m)),
+            }
+          })
+
+          const next = { ...prevOutbox }
+          delete next[peer.id]
+          return next
+        }
+        return prevOutbox
+      })
+    })
+
+    const unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, ({ peerId: offlineId }) => {
+      setOnlinePeers((prev) => {
+        const next = new Set(prev)
+        next.delete(offlineId)
+        return next
+      })
+    })
+
+    return () => {
+      unsubAnnounce()
+      unsubOffline()
+    }
+  }, [])
 
   // Listen for incoming chat messages and typing events
   useEffect(() => {
@@ -186,7 +259,7 @@ export default function ChatWindow({ activePeer }) {
       playNotificationChime()
       setMessages((prev) => ({
         ...prev,
-        [from]: [...(prev[from] || []), { from, text, ts: ts ?? Date.now(), id: `${from}-${ts}` }],
+        [from]: [...(prev[from] || []), { from, text, ts: ts ?? Date.now(), id: `${from}-${ts}`, status: 'sent' }],
       }))
     })
 
@@ -216,6 +289,7 @@ export default function ChatWindow({ activePeer }) {
             text: `📎 ${name}  ·  ${formatBytes(size)}`,
             ts: Date.now(),
             id: `file-offer-${transferId}`,
+            status: 'sent',
           },
         ],
       }))
@@ -256,13 +330,33 @@ export default function ChatWindow({ activePeer }) {
       wsClient.send('TYPING_STOP', { to: peerId })
     }
 
-    const msg = { from: 'me', to: peerId, text, ts: Date.now(), id: `me-${Date.now()}` }
+    const currentOnline = onlinePeers.has(peerId)
+    const status = currentOnline ? 'sent' : 'pending'
 
+    const msg = {
+      from: 'me',
+      to: peerId,
+      text,
+      ts: Date.now(),
+      id: `me-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      status,
+    }
+
+    // Optimistically add to messages
     setMessages((prev) => ({
       ...prev,
       [peerId]: [...(prev[peerId] || []), msg],
     }))
 
+    if (!currentOnline) {
+      // Buffer in outbox
+      setOutbox((prev) => ({
+        ...prev,
+        [peerId]: [...(prev[peerId] || []), msg],
+      }))
+    }
+
+    // Always deliver to backend proxy (which sends or buffers)
     wsClient.send('CHAT_MESSAGE', { to: peerId, text })
     setInputValue('')
   }
@@ -292,7 +386,7 @@ export default function ChatWindow({ activePeer }) {
         ...prev,
         [peerId]: [
           ...(prev[peerId] || []),
-          { from: 'me', to: peerId, text: warningText, ts: Date.now(), id: `warn-${Date.now()}` },
+          { from: 'me', to: peerId, text: warningText, ts: Date.now(), id: `warn-${Date.now()}`, status: 'sent' },
         ],
       }))
       return
@@ -312,7 +406,7 @@ export default function ChatWindow({ activePeer }) {
     const msgId = `me-${Date.now()}`
     setMessages((prev) => ({
       ...prev,
-      [peerId]: [...(prev[peerId] || []), { from: 'me', to: peerId, text: `📎 Offering: ${file.name} (Waiting for accept…)`, ts: Date.now(), id: msgId }],
+      [peerId]: [...(prev[peerId] || []), { from: 'me', to: peerId, text: `📎 Offering: ${file.name} (Waiting for accept…)`, ts: Date.now(), id: msgId, status: 'sent' }],
     }))
 
     const updateProgressMsg = (text) => {
@@ -433,7 +527,7 @@ export default function ChatWindow({ activePeer }) {
         >
           <div className="flex-center gap-2">
             <span
-              className="status-dot online"
+              className={`status-dot ${isPeerOnline ? 'online' : 'idle'}`}
               style={{ display: 'inline-block' }}
             />
             <span style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--color-text-primary)' }}>
@@ -448,6 +542,9 @@ export default function ChatWindow({ activePeer }) {
             >
               {activePeer.ip}
             </span>
+            {!isPeerOnline && (
+              <span className="badge badge-neutral" style={{ fontSize: '0.65rem' }}>Offline</span>
+            )}
           </div>
 
           <button
@@ -517,7 +614,11 @@ export default function ChatWindow({ activePeer }) {
           <textarea
             id="message-input"
             className="input"
-            placeholder={`Message ${activePeer.name}…`}
+            placeholder={
+              isPeerOnline
+                ? `Message ${activePeer.name}…`
+                : `Message ${activePeer.name} (offline — queued until online)…`
+            }
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
@@ -535,7 +636,7 @@ export default function ChatWindow({ activePeer }) {
             className="btn btn-primary btn-icon"
             onClick={handleSend}
             disabled={!inputValue.trim()}
-            title="Send message (Enter)"
+            title={isPeerOnline ? 'Send message (Enter)' : 'Queue offline message (Enter)'}
             style={{ flexShrink: 0, width: 38, height: 38 }}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
