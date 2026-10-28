@@ -299,19 +299,26 @@ export default function ChatWindow({ activePeer }) {
     })
 
     const unsubFileOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, transferId }) => {
-      setMessages((prev) => ({
-        ...prev,
-        [from]: [
-          ...(prev[from] || []),
-          {
-            from,
-            text: `📎 ${name}  ·  ${formatBytes(size)}`,
-            ts: Date.now(),
-            id: `file-offer-${transferId}`,
-            status: 'sent',
-          },
-        ],
-      }))
+      setMessages((prev) => {
+        const peerMsgs = prev[from] || []
+        // Deduplicate file offer bubbles for the same transferId
+        if (peerMsgs.some((m) => m.id === `file-offer-${transferId}`)) {
+          return prev
+        }
+        return {
+          ...prev,
+          [from]: [
+            ...peerMsgs,
+            {
+              from,
+              text: `📎 ${name}  ·  ${formatBytes(size)}`,
+              ts: Date.now(),
+              id: `file-offer-${transferId}`,
+              status: 'sent',
+            },
+          ],
+        }
+      })
     })
 
     return () => {
