@@ -64,7 +64,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
   const localKeyPair = generateKeyPair();
   
   const msgBuffer = new MessageBuffer();
-  activePeers.set(ip, { socket, sessionKey: null, msgBuffer, sessionId: null, localKeyPair });
+  activePeers.set(ip, { socket, sessionKey: null, msgBuffer, sessionId: null, localKeyPair, name: null });
 
   // Pipe Aritra's raw data into Arnav's buffer
   socket.on('data', (data) => {
@@ -91,6 +91,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       );
       socket.write(ackMsg);
       console.log(`[Proxy] Handshake completed with ${ip}`);
+
+      // Exchange username over encrypted channel
+      const namePayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify({ username })));
+      const namePacket = MessageBuilder.build(
+        OPCODES.PEER_ANNOUNCE,
+        0,
+        peerState.sessionId,
+        namePayload
+      );
+      socket.write(namePacket);
       return;
     }
 
@@ -100,6 +110,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       // Arnav's Fix: Store the Session ID provided by the peer
       peerState.sessionId = msg.sessionId;
       console.log(`[Proxy] Handshake ACK received from ${ip}`);
+
+      // Exchange username over encrypted channel
+      const namePayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify({ username })));
+      const namePacket = MessageBuilder.build(
+        OPCODES.PEER_ANNOUNCE,
+        0,
+        peerState.sessionId,
+        namePayload
+      );
+      socket.write(namePacket);
       return;
     }
 
@@ -119,7 +139,25 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       const plaintext = decryptMessage(peerState.sessionKey, msg.payload);
       
       // Route decrypted message to Abhinav's frontend
-      if (msg.opcode === OPCODES.CHAT_MESSAGE) {
+      if (msg.opcode === OPCODES.PEER_ANNOUNCE) {
+        let peerName = ip;
+        try {
+          const parsed = JSON.parse(plaintext.toString());
+          if (parsed && parsed.username) peerName = parsed.username;
+        } catch {
+          peerName = plaintext.toString() || ip;
+        }
+        peerState.name = peerName;
+        console.log(`[Proxy] Direct peer announced name: ${peerName} (${ip})`);
+        broadcastWS({
+          type: 'PEER_ANNOUNCE',
+          peer: {
+            id: ip,
+            ip: ip,
+            name: peerName
+          }
+        });
+      } else if (msg.opcode === OPCODES.CHAT_MESSAGE) {
         broadcastWS({
           type: 'CHAT_MESSAGE',
           from: ip, // The frontend expects 'from', not 'sender'
@@ -169,6 +207,15 @@ transport.on('disconnected', (ip) => {
   broadcastWS({ type: 'PEER_OFFLINE', peerId: ip }); // Frontend expects peerId
 });
 
+transport.on('connectError', ({ ip, error }) => {
+  console.warn(`[Proxy] TCP Connection to ${ip} failed: ${error}`);
+  broadcastWS({
+    type: 'PEER_CONNECT_FAILED',
+    ip,
+    error: error || 'Connection failed'
+  });
+});
+
 // Connect Abhinav's Frontend to Arnav's Protocol and Aritra's TCP
 wss.on('connection', (ws) => {
   console.log('[Proxy] Frontend React UI connected via WebSocket.');
@@ -192,7 +239,7 @@ wss.on('connection', (ws) => {
       peer: {
         id: ip,
         ip: ip,
-        name: discoveredInfo?.username || ip
+        name: peerState.name || discoveredInfo?.username || ip
       }
     }));
   }
@@ -200,8 +247,25 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data);
-      
-      if (msg.type === 'CHAT_MESSAGE') {
+
+      if (msg.type === 'CONNECT_PEER') {
+        const targetIp = (msg.ip || '').trim();
+        if (!targetIp) return;
+        console.log(`[Proxy] Direct TCP connection requested to: ${targetIp}`);
+        const existing = activePeers.get(targetIp);
+        if (existing && existing.sessionKey) {
+          broadcastWS({
+            type: 'PEER_ANNOUNCE',
+            peer: {
+              id: targetIp,
+              ip: targetIp,
+              name: existing.name || discovery.peers.get(targetIp)?.username || targetIp
+            }
+          });
+        } else {
+          transport.connectToPeer(targetIp, TCP_PORT);
+        }
+      } else if (msg.type === 'CHAT_MESSAGE') {
         const { to, text } = msg; // Frontend sends 'to', not 'targetIp'
         const peerState = activePeers.get(to);
         

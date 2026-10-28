@@ -1,6 +1,6 @@
 /**
  * PeerList.jsx
- * Left sidebar listing discovered LAN peers.
+ * Left sidebar listing discovered LAN peers with Smart Search & Direct IP Connect.
  * Peers arrive via PEER_ANNOUNCE / PEER_OFFLINE WebSocket events.
  */
 import { useEffect, useState } from 'react'
@@ -78,7 +78,7 @@ function PeerRow({ peer, isActive, onClick, unread }) {
           {peer.ip}
         </div>
       </div>
-      {/* Unread badge — shown when there are unseen messages from this peer */}
+      {/* Unread badge */}
       {unread > 0 && (
         <span
           style={{
@@ -106,6 +106,9 @@ function PeerRow({ peer, isActive, onClick, unread }) {
 
 export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }) {
   const [peers, setPeers] = useState([])
+  const [query, setQuery] = useState('')
+  const [connectingIp, setConnectingIp] = useState(null)
+  const [errorMsg, setErrorMsg] = useState(null)
 
   useEffect(() => {
     const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
@@ -114,33 +117,93 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
         const exists = prev.find((p) => p.id === peer.id)
         return exists ? prev.map((p) => (p.id === peer.id ? peer : p)) : [...prev, peer]
       })
+
+      // If this was the IP we were connecting to, auto-select and clear connecting state
+      setConnectingIp((curr) => {
+        if (curr && (curr === peer.ip || curr === peer.id)) {
+          onSelectPeer(peer)
+          return null
+        }
+        return curr
+      })
     })
 
     const unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, ({ peerId }) => {
       setPeers((prev) => prev.filter((p) => p.id !== peerId))
     })
 
+    const unsubConnectFailed = wsClient.on(WS_EVENT.PEER_CONNECT_FAILED, ({ ip, error }) => {
+      setConnectingIp((curr) => {
+        if (curr === ip) {
+          setErrorMsg(error || `Could not connect to ${ip}`)
+          setTimeout(() => setErrorMsg(null), 4000)
+          return null
+        }
+        return curr
+      })
+    })
+
     return () => {
       unsubAnnounce()
       unsubOffline()
+      unsubConnectFailed()
     }
-  }, [])
+  }, [onSelectPeer])
+
+  function handleConnect(targetIp) {
+    const ip = (targetIp || query).trim()
+    if (!ip) return
+    setConnectingIp(ip)
+    setErrorMsg(null)
+    wsClient.send('CONNECT_PEER', { ip })
+
+    // Reset connecting spinner after 10s if no response
+    setTimeout(() => {
+      setConnectingIp((curr) => (curr === ip ? null : curr))
+    }, 10000)
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter') {
+      const trimmed = query.trim()
+      if (!trimmed) return
+      const matched = peers.filter(
+        (p) => p.name.toLowerCase().includes(trimmed.toLowerCase()) || p.ip.includes(trimmed)
+      )
+      if (matched.length === 1) {
+        onSelectPeer(matched[0])
+      } else {
+        handleConnect(trimmed)
+      }
+    }
+  }
+
+  const trimmedQuery = query.trim().toLowerCase()
+  const filteredPeers = peers.filter(
+    (p) => p.name.toLowerCase().includes(trimmedQuery) || p.ip.toLowerCase().includes(trimmedQuery)
+  )
+
+  const showDirectConnect =
+    trimmedQuery.length > 0 &&
+    !peers.some(
+      (p) => p.ip.toLowerCase() === trimmedQuery || p.name.toLowerCase() === trimmedQuery
+    )
 
   return (
     <aside
       id="peer-sidebar"
       className="glass flex-col"
       style={{
-        width: 240,
+        width: 250,
         flexShrink: 0,
         borderRight: '1px solid var(--color-border)',
-        padding: '16px 10px',
-        gap: 4,
+        padding: '16px 12px',
+        gap: 8,
         overflowY: 'auto',
       }}
     >
       {/* Header */}
-      <div className="flex-between" style={{ padding: '0 4px', marginBottom: 8 }}>
+      <div className="flex-between" style={{ padding: '0 4px' }}>
         <p
           style={{
             fontSize: '0.7rem',
@@ -159,59 +222,173 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
         )}
       </div>
 
-      {/* Peer rows */}
-      {peers.length > 0 ? (
-        peers.map((peer) => (
-          <PeerRow
-            key={peer.id}
-            peer={peer}
-            isActive={activeChat === peer.id}
-            onClick={onSelectPeer}
-            unread={unreadCounts[peer.id] || 0}
-          />
-        ))
-      ) : (
-        /* Discovery skeleton */
-        <div className="flex-col gap-2" style={{ marginTop: 4 }}>
-          {[75, 55, 85].map((w, i) => (
-            <div
-              key={i}
-              className="flex-center gap-2"
-              style={{ padding: '8px 10px', animationDelay: `${i * 80}ms` }}
-            >
-              <div
-                className="skeleton"
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 'var(--radius-full)',
-                  flexShrink: 0,
-                }}
-              />
-              <div className="flex-col gap-1" style={{ flex: 1 }}>
-                <div
-                  className="skeleton"
-                  style={{ height: 10, width: `${w}%`, borderRadius: 'var(--radius-sm)' }}
-                />
-                <div
-                  className="skeleton"
-                  style={{ height: 8, width: '50%', borderRadius: 'var(--radius-sm)' }}
-                />
-              </div>
-            </div>
-          ))}
-          <p
+      {/* Smart Search & Connect Bar */}
+      <div style={{ position: 'relative' }}>
+        <input
+          id="peer-search-input"
+          type="text"
+          className="input"
+          placeholder="Search name or IP…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          style={{
+            width: '100%',
+            padding: '7px 10px',
+            fontSize: '0.8rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-bg-base)',
+            border: '1px solid var(--color-border)',
+          }}
+        />
+        {query && (
+          <button
+            onClick={() => setQuery('')}
             style={{
-              fontSize: '0.75rem',
+              position: 'absolute',
+              right: 8,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'none',
+              border: 'none',
               color: 'var(--color-text-muted)',
-              textAlign: 'center',
-              marginTop: 8,
+              cursor: 'pointer',
+              fontSize: '0.75rem',
             }}
           >
-            Discovering peers…
-          </p>
+            ✕
+          </button>
+        )}
+      </div>
+
+      {/* Direct Connect Action Row */}
+      {showDirectConnect && (
+        <div
+          className="animate-slide-in-up"
+          style={{
+            padding: '8px 10px',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(99, 102, 241, 0.12)',
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}
+        >
+          <div style={{ overflow: 'hidden', flex: 1 }}>
+            <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--color-accent-light)' }}>
+              Direct Connect
+            </div>
+            <div
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--color-text-primary)',
+                fontFamily: 'var(--font-mono)',
+                textOverflow: 'ellipsis',
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {query.trim()}
+            </div>
+          </div>
+          <button
+            id="direct-connect-btn"
+            className="btn btn-primary btn-sm"
+            disabled={connectingIp === query.trim()}
+            onClick={() => handleConnect(query.trim())}
+            style={{ padding: '3px 8px', fontSize: '0.7rem' }}
+          >
+            {connectingIp === query.trim() ? 'Connecting…' : 'Connect'}
+          </button>
         </div>
       )}
+
+      {/* Error message */}
+      {errorMsg && (
+        <div
+          style={{
+            padding: '6px 8px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(239, 68, 68, 0.15)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            color: '#f87171',
+            fontSize: '0.75rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>{errorMsg}</span>
+          <button
+            onClick={() => setErrorMsg(null)}
+            style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.85rem' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Peer list */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+        {filteredPeers.length > 0 ? (
+          filteredPeers.map((peer) => (
+            <PeerRow
+              key={peer.id}
+              peer={peer}
+              isActive={activeChat === peer.id}
+              onClick={onSelectPeer}
+              unread={unreadCounts[peer.id] || 0}
+            />
+          ))
+        ) : query ? (
+          <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', textAlign: 'center', marginTop: 12 }}>
+            No peers matching "{query}"
+          </p>
+        ) : (
+          /* Discovery skeleton */
+          <div className="flex-col gap-2" style={{ marginTop: 4 }}>
+            {[75, 55, 85].map((w, i) => (
+              <div
+                key={i}
+                className="flex-center gap-2"
+                style={{ padding: '8px 10px', animationDelay: `${i * 80}ms` }}
+              >
+                <div
+                  className="skeleton"
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 'var(--radius-full)',
+                    flexShrink: 0,
+                  }}
+                />
+                <div className="flex-col gap-1" style={{ flex: 1 }}>
+                  <div
+                    className="skeleton"
+                    style={{ height: 10, width: `${w}%`, borderRadius: 'var(--radius-sm)' }}
+                  />
+                  <div
+                    className="skeleton"
+                    style={{ height: 8, width: '50%', borderRadius: 'var(--radius-sm)' }}
+                  />
+                </div>
+              </div>
+            ))}
+            <p
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--color-text-muted)',
+                textAlign: 'center',
+                marginTop: 8,
+              }}
+            >
+              Discovering peers…
+            </p>
+          </div>
+        )}
+      </div>
     </aside>
   )
 }
