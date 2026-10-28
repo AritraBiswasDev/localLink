@@ -256,11 +256,30 @@ export default function ChatWindow({ activePeer }) {
   useEffect(() => {
     const unsubChat = wsClient.on(WS_EVENT.CHAT_MESSAGE, (payload) => {
       const { from, text, ts } = payload
-      playNotificationChime()
-      setMessages((prev) => ({
-        ...prev,
-        [from]: [...(prev[from] || []), { from, text, ts: ts ?? Date.now(), id: `${from}-${ts}`, status: 'sent' }],
-      }))
+      const msgTs = ts ?? Date.now()
+
+      setMessages((prev) => {
+        const peerList = prev[from] || []
+        // Deduplicate messages with identical text received within 2 seconds
+        const lastMsg = peerList[peerList.length - 1]
+        if (
+          lastMsg &&
+          lastMsg.from === from &&
+          lastMsg.text === text &&
+          Math.abs(msgTs - lastMsg.ts) < 2000
+        ) {
+          return prev
+        }
+
+        playNotificationChime()
+        return {
+          ...prev,
+          [from]: [
+            ...peerList,
+            { from, text, ts: msgTs, id: `${from}-${msgTs}-${Math.random()}`, status: 'sent' },
+          ],
+        }
+      })
     })
 
     const unsubTypingStart = wsClient.on(WS_EVENT.TYPING_START, ({ from }) => {
