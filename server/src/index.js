@@ -40,7 +40,27 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 // State Management
 const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, sessionId, localKeyPair }
 const activeTransfers = new Map(); // transferId -> ip
+const offlineMessageQueue = new Map(); // ip -> [ { text } ]
 let activeWsClient = null; // Single active frontend WebSocket connection
+
+function flushOfflineMessages(ip, peerState) {
+  if (offlineMessageQueue.has(ip) && peerState.sessionKey && peerState.sessionId) {
+    const queue = offlineMessageQueue.get(ip);
+    console.log(`[Proxy] Flushing ${queue.length} offline queued message(s) to ${ip}`);
+    while (queue.length > 0) {
+      const { text } = queue.shift();
+      const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
+      const packet = MessageBuilder.build(
+        OPCODES.CHAT_MESSAGE,
+        Math.floor(Date.now() / 1000) % 4294967295,
+        peerState.sessionId,
+        encryptedPayload
+      );
+      peerState.socket.write(packet);
+    }
+    offlineMessageQueue.delete(ip);
+  }
+}
 
 // Connect Aritra's UDP to Abhinav's Frontend
 discovery.on('peerFound', (peerInfo) => {
@@ -113,6 +133,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         namePayload
       );
       socket.write(namePacket);
+      flushOfflineMessages(ip, peerState);
       return;
     }
 
@@ -132,6 +153,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         namePayload
       );
       socket.write(namePacket);
+      flushOfflineMessages(ip, peerState);
       return;
     }
 
@@ -288,7 +310,7 @@ wss.on('connection', (ws) => {
         const { to, text } = msg; // Frontend sends 'to', not 'targetIp'
         const peerState = activePeers.get(to);
         
-        if (peerState && peerState.sessionKey) {
+        if (peerState && peerState.sessionKey && peerState.sessionId && !peerState.socket.destroyed) {
           const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
           const packet = MessageBuilder.build(
             OPCODES.CHAT_MESSAGE,
@@ -297,6 +319,13 @@ wss.on('connection', (ws) => {
             encryptedPayload
           );
           peerState.socket.write(packet);
+        } else {
+          console.log(`[Proxy] Peer ${to} not connected right now. Queueing message for reconnection.`);
+          if (!offlineMessageQueue.has(to)) offlineMessageQueue.set(to, []);
+          offlineMessageQueue.get(to).push({ text });
+          if (!activePeers.has(to)) {
+            transport.connectToPeer(to, TCP_PORT);
+          }
         }
       } else if (['TYPING_START', 'TYPING_STOP'].includes(msg.type)) {
         const { to } = msg;
