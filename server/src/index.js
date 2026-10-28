@@ -1,11 +1,23 @@
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const os = require('os');
 const PeerDiscovery = require('./network/PeerDiscovery');
 const TransportManager = require('./network/TransportManager');
 const MessageBuffer = require('./protocol/MessageBuffer');
 const MessageBuilder = require('./protocol/MessageBuilder');
 const { OPCODES } = require('./protocol/constants');
 const { generateKeyPair, deriveSharedSecret, encryptMessage, decryptMessage } = require('./crypto');
+
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      const isV4 = net.family === 'IPv4' || net.family === 4;
+      if (isV4 && !net.internal) return net.address;
+    }
+  }
+  return '127.0.0.1';
+}
 
 // Configuration
 const TCP_PORT = 9000;
@@ -228,6 +240,13 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (activeWsClient === ws) activeWsClient = null;
   });
+
+  // Send local client info (username and detected local IP)
+  ws.send(JSON.stringify({
+    type: 'MY_INFO',
+    username,
+    ip: getLocalIp()
+  }));
   // Immediately re-announce all peers that have COMPLETED the ECDH handshake (sessionKey set).
   // Using activePeers (not discovery.peers) as the source of truth so we never expose a peer
   // that is still mid-handshake and can't receive messages yet.

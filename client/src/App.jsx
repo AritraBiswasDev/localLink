@@ -22,6 +22,8 @@ import FileTransferBar from './components/FileTransferBar'
 export default function App() {
   const [activePeer, setActivePeer] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({}) // { [peerId]: count }
+  const [myInfo, setMyInfo] = useState({ username: '', ip: '' })
+  const [copied, setCopied] = useState(false)
 
   // Ref so the wsClient listener always sees the latest activePeer
   // without needing to re-register the listener every time it changes.
@@ -34,6 +36,14 @@ export default function App() {
     return () => wsClient.disconnect()
   }, [])
 
+  // Listen for local machine info (detected IP and username)
+  useEffect(() => {
+    const unsub = wsClient.on(WS_EVENT.MY_INFO, (info) => {
+      if (info) setMyInfo(info)
+    })
+    return unsub
+  }, [])
+
   // Track unread counts — increment when a message arrives for a non-active peer
   useEffect(() => {
     const unsub = wsClient.on(WS_EVENT.CHAT_MESSAGE, ({ from }) => {
@@ -43,6 +53,13 @@ export default function App() {
     })
     return unsub
   }, [])
+
+  function handleCopyIp() {
+    if (!myInfo.ip) return
+    navigator.clipboard.writeText(myInfo.ip)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   // When user selects a peer, clear their unread badge
   function handleSelectPeer(peer) {
@@ -91,6 +108,36 @@ export default function App() {
         </div>
 
         <div className="flex-center gap-2">
+          {myInfo.ip && (
+            <button
+              id="my-ip-pill"
+              onClick={handleCopyIp}
+              className="btn-ghost flex-center gap-2"
+              title="Click to copy your campus IP to share with friends"
+              style={{
+                padding: '4px 10px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--color-bg-elevated)',
+                border: '1px solid var(--color-border)',
+                cursor: 'pointer',
+                fontSize: '0.75rem',
+                marginRight: 4,
+              }}
+            >
+              <span style={{ color: 'var(--color-text-muted)' }}>You:</span>
+              <span style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{myInfo.username}</span>
+              <span style={{ color: 'var(--color-border)' }}>•</span>
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-accent-light)' }}>
+                {myInfo.ip}
+              </span>
+              <span
+                className={copied ? 'badge badge-online' : 'badge badge-neutral'}
+                style={{ fontSize: '0.65rem', padding: '1px 5px' }}
+              >
+                {copied ? 'Copied! ✓' : 'Copy'}
+              </span>
+            </button>
+          )}
           <span className="badge badge-accent" style={{ fontSize: '0.7rem' }}>E2EE</span>
           <ConnectionStatus />
         </div>
