@@ -33,11 +33,19 @@ export default function FileTransferBar() {
   // Structure: { [transferId]: { [chunkIndex]: Uint8Array } }
   const chunkDataRef = useRef({})
 
+  // Track completed transfers to strictly avoid double download / 0-byte ghost file
+  const completedTransfersRef = useRef(new Set())
+
   useEffect(() => {
     const unsubOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, mimeType, transferId }) => {
+      // Deduplicate offers for the same transferId
+      if (transfersRef.current.some((t) => t.transferId === transferId)) {
+        return
+      }
+
       chunkDataRef.current[transferId] = {}
       setTransfers((prev) => [
-        ...prev,
+        ...prev.filter((t) => t.transferId !== transferId),
         { transferId, from, name, size, fileType: mimeType || 'application/octet-stream', status: STATUS.PENDING, progress: 0, totalChunks: 0 },
       ])
     })
@@ -63,11 +71,11 @@ export default function FileTransferBar() {
     })
 
     const unsubComplete = wsClient.on(WS_EVENT.FILE_COMPLETE, ({ transferId }) => {
-      // ── KEY FIX ──────────────────────────────────────────────────────────────
-      // Download is triggered HERE, directly in the event handler.
-      // Triggering it inside setTransfers() caused React 18 Strict Mode to call
-      // the updater twice, producing one real download and one 0-byte ghost file.
-      // ─────────────────────────────────────────────────────────────────────────
+      // Prevent duplicate completion triggers (e.g. from multiple open tabs or repeat packets)
+      if (completedTransfersRef.current.has(transferId)) {
+        return
+      }
+
       const transfer = transfersRef.current.find((t) => t.transferId === transferId)
 
       if (transfer) {
@@ -80,15 +88,22 @@ export default function FileTransferBar() {
             if (chunks[i]) orderedChunks.push(chunks[i])
             else console.error(`[FileTransferBar] Missing chunk ${i} for "${transfer.name}"`)
           }
-          const blob = new Blob(orderedChunks, { type: transfer.fileType })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = transfer.name
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          setTimeout(() => URL.revokeObjectURL(url), 1000)
+
+          // Safety guard: only trigger download if chunks actually exist!
+          if (orderedChunks.length > 0) {
+            completedTransfersRef.current.add(transferId)
+            const blob = new Blob(orderedChunks, { type: transfer.fileType })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = transfer.name
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
+          } else {
+            console.warn(`[FileTransferBar] No chunks available to assemble for "${transfer.name}" — skipping 0B download.`)
+          }
         } catch (err) {
           console.error('[FileTransferBar] Failed to assemble file:', err)
         }

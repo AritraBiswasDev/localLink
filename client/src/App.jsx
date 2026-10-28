@@ -45,6 +45,20 @@ export default function App() {
     return unsub
   }, [])
 
+  // Keep activePeer updated when their name is announced or changed
+  useEffect(() => {
+    const unsub = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
+      if (!peer) return
+      setActivePeer((curr) => {
+        if (curr && (curr.id === peer.id || curr.ip === peer.ip)) {
+          return { ...curr, ...peer }
+        }
+        return curr
+      })
+    })
+    return unsub
+  }, [])
+
   // Track unread counts — increment when a message arrives for a non-active peer
   useEffect(() => {
     const unsub = wsClient.on(WS_EVENT.CHAT_MESSAGE, ({ from }) => {
