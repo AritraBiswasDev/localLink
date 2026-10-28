@@ -25,8 +25,15 @@ const UDP_PORT = 9001;
 const WS_PORT = 9002; // Distinct from Vite dev port (3000) and TCP/UDP ports (9000/9001)
 
 // Ask for custom username
-const username = process.argv[2] || `User_${Math.floor(Math.random() * 1000)}`;
-console.log(`Starting LocalLink Proxy for: ${username}`);
+const username = process.argv[2] || process.env.USERNAME_ARG || process.env.USER_NAME || `User_${Math.floor(Math.random() * 1000)}`;
+
+console.log(`=========================================`);
+console.log(` LocalLink E2EE Node Proxy`);
+console.log(` User     : ${username}`);
+console.log(` Local IP : ${getLocalIp()}`);
+console.log(` TCP Port : ${TCP_PORT} (LAN Encrypted Mesh)`);
+console.log(` WS Port  : ${WS_PORT} (Browser Local Bridge)`);
+console.log(`=========================================`);
 
 // 1. Initialize Network Layers (Aritra's Module)
 const transport = new TransportManager(TCP_PORT);
@@ -93,6 +100,16 @@ discovery.on('peerOffline', (ip) => {
 transport.on('connection', ({ ip, socket, isOutbound }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
   
+  // Clean up any old duplicate session for this IP to prevent duplicate message delivery!
+  if (activePeers.has(ip)) {
+    const existing = activePeers.get(ip);
+    if (existing && existing.socket && existing.socket !== socket) {
+      console.log(`[Proxy] Closing old duplicate TCP socket for ${ip}`);
+      existing.socket.removeAllListeners();
+      existing.socket.destroy();
+    }
+  }
+
   const localKeyPair = generateKeyPair();
   
   const msgBuffer = new MessageBuffer();

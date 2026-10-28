@@ -18,6 +18,7 @@ class TransportManager extends EventEmitter {
     this.port = port;
     this.server = null;
     this.activeSockets = new Map(); // ip -> net.Socket
+    this.pendingSockets = new Map(); // ip -> net.Socket
   }
 
   startServer() {
@@ -38,24 +39,33 @@ class TransportManager extends EventEmitter {
   }
 
   connectToPeer(ip, port) {
-    if (this.activeSockets.has(ip)) return this.activeSockets.get(ip);
+    const normIp = normalizeIp(ip);
+    if (this.activeSockets.has(normIp)) {
+      return this.activeSockets.get(normIp);
+    }
+    if (this.pendingSockets.has(normIp)) {
+      return this.pendingSockets.get(normIp);
+    }
 
     const socket = new net.Socket();
+    this.pendingSockets.set(normIp, socket);
 
     // Pre-connection error handler: covers the window between socket creation and
     // successful connect. Removed once connected so only _handleNewSocket's handler
     // remains — avoiding a double-fire of _cleanupSocket on post-connection errors.
     const preConnectError = (err) => {
-      console.error(`TCP connection error to ${ip}:`, err.message);
-      this.emit('connectError', { ip, error: err.message });
+      console.error(`TCP connection error to ${normIp}:`, err.message);
+      this.pendingSockets.delete(normIp);
+      this.emit('connectError', { ip: normIp, error: err.message });
       socket.destroy();
     };
     socket.once('error', preConnectError);
 
-    socket.connect(port, ip, () => {
+    socket.connect(port, normIp, () => {
+      this.pendingSockets.delete(normIp);
       // Hand off to _handleNewSocket which registers its own error/close listeners.
       socket.removeListener('error', preConnectError);
-      this._handleNewSocket(socket, ip);
+      this._handleNewSocket(socket, normIp);
     });
 
     return socket;
@@ -66,11 +76,21 @@ class TransportManager extends EventEmitter {
     socket.setNoDelay(true);
 
     // Keep-alives detect silently dead connections without a hard timeout.
-    // A hard setTimeout(15000) was removed because it killed sockets during
-    // large file transfers where chunks arrive every few seconds.
     socket.setKeepAlive(true, 5000);
 
     const ip = normalizeIp(knownIp || socket.remoteAddress);
+    this.pendingSockets.delete(ip);
+
+    // If an existing socket already exists for this IP, close and clean it up cleanly
+    if (this.activeSockets.has(ip)) {
+      const oldSocket = this.activeSockets.get(ip);
+      if (oldSocket && oldSocket !== socket) {
+        console.log(`[TransportManager] Replacing duplicate active TCP socket for ${ip}`);
+        oldSocket.removeAllListeners();
+        oldSocket.destroy();
+      }
+    }
+
     this.activeSockets.set(ip, socket);
 
     socket.on('data', (data) => {
