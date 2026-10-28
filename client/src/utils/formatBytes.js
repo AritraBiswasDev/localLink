@@ -1,6 +1,6 @@
 /**
- * formatBytes.js — Shared byte-size formatter utility.
- * Single source of truth — previously duplicated in ChatWindow and FileTransferBar
+ * formatBytes.js - Shared byte-size formatter utility.
+ * Single source of truth - previously duplicated in ChatWindow and FileTransferBar
  * with inconsistent handling of 0-byte files.
  *
  * @param {number} bytes
