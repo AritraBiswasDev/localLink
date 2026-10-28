@@ -23,8 +23,10 @@ export const WS_STATE = Object.freeze({
 // Event type constants
 export const WS_EVENT = Object.freeze({
   CONNECTION:    'connection',
+  MY_INFO:       'MY_INFO',
   PEER_ANNOUNCE: 'PEER_ANNOUNCE',
   PEER_OFFLINE:  'PEER_OFFLINE',
+  PEER_CONNECT_FAILED: 'PEER_CONNECT_FAILED',
   CHAT_MESSAGE:  'CHAT_MESSAGE',
   TYPING_START:  'TYPING_START',
   TYPING_STOP:   'TYPING_STOP',

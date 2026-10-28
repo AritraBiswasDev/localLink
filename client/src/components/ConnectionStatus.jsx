@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ConnectionStatus.jsx
  * Topbar pill showing live WebSocket connection state.
  * Reads state from wsClient and updates via event listener.
@@ -23,7 +23,7 @@ export default function ConnectionStatus() {
     return unsub
   }, [])
 
-  const { label, dotClass, badgeClass, pulse } = STATE_CONFIG[state] ?? STATE_CONFIG[WS_STATE.CLOSED]
+  const { label, dotClass, badgeClass } = STATE_CONFIG[state] ?? STATE_CONFIG[WS_STATE.CLOSED]
 
   return (
     <div
@@ -33,7 +33,7 @@ export default function ConnectionStatus() {
       title={`WebSocket: ${state}`}
     >
       <span
-        className={`status-dot ${dotClass}${pulse ? ' animate-pulse-ring' : ''}`}
+        className={`status-dot ${dotClass}`}
         style={{ display: 'inline-block' }}
       />
       {label}

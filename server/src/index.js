@@ -1,11 +1,23 @@
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const os = require('os');
 const PeerDiscovery = require('./network/PeerDiscovery');
 const TransportManager = require('./network/TransportManager');
 const MessageBuffer = require('./protocol/MessageBuffer');
 const MessageBuilder = require('./protocol/MessageBuilder');
 const { OPCODES } = require('./protocol/constants');
 const { generateKeyPair, deriveSharedSecret, encryptMessage, decryptMessage } = require('./crypto');
+
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      const isV4 = net.family === 'IPv4' || net.family === 4;
+      if (isV4 && !net.internal) return net.address;
+    }
+  }
+  return '127.0.0.1';
+}
 
 // Configuration
 const TCP_PORT = 9000;
@@ -64,7 +76,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
   const localKeyPair = generateKeyPair();
   
   const msgBuffer = new MessageBuffer();
-  activePeers.set(ip, { socket, sessionKey: null, msgBuffer, sessionId: null, localKeyPair });
+  activePeers.set(ip, { socket, sessionKey: null, msgBuffer, sessionId: null, localKeyPair, name: null });
 
   // Pipe Aritra's raw data into Arnav's buffer
   socket.on('data', (data) => {
@@ -91,6 +103,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       );
       socket.write(ackMsg);
       console.log(`[Proxy] Handshake completed with ${ip}`);
+
+      // Exchange username over encrypted channel
+      const namePayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify({ username })));
+      const namePacket = MessageBuilder.build(
+        OPCODES.PEER_ANNOUNCE,
+        0,
+        peerState.sessionId,
+        namePayload
+      );
+      socket.write(namePacket);
       return;
     }
 
@@ -100,6 +122,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       // Arnav's Fix: Store the Session ID provided by the peer
       peerState.sessionId = msg.sessionId;
       console.log(`[Proxy] Handshake ACK received from ${ip}`);
+
+      // Exchange username over encrypted channel
+      const namePayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify({ username })));
+      const namePacket = MessageBuilder.build(
+        OPCODES.PEER_ANNOUNCE,
+        0,
+        peerState.sessionId,
+        namePayload
+      );
+      socket.write(namePacket);
       return;
     }
 
@@ -119,7 +151,25 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
       const plaintext = decryptMessage(peerState.sessionKey, msg.payload);
       
       // Route decrypted message to Abhinav's frontend
-      if (msg.opcode === OPCODES.CHAT_MESSAGE) {
+      if (msg.opcode === OPCODES.PEER_ANNOUNCE) {
+        let peerName = ip;
+        try {
+          const parsed = JSON.parse(plaintext.toString());
+          if (parsed && parsed.username) peerName = parsed.username;
+        } catch {
+          peerName = plaintext.toString() || ip;
+        }
+        peerState.name = peerName;
+        console.log(`[Proxy] Direct peer announced name: ${peerName} (${ip})`);
+        broadcastWS({
+          type: 'PEER_ANNOUNCE',
+          peer: {
+            id: ip,
+            ip: ip,
+            name: peerName
+          }
+        });
+      } else if (msg.opcode === OPCODES.CHAT_MESSAGE) {
         broadcastWS({
           type: 'CHAT_MESSAGE',
           from: ip, // The frontend expects 'from', not 'sender'
@@ -169,6 +219,15 @@ transport.on('disconnected', (ip) => {
   broadcastWS({ type: 'PEER_OFFLINE', peerId: ip }); // Frontend expects peerId
 });
 
+transport.on('connectError', ({ ip, error }) => {
+  console.warn(`[Proxy] TCP Connection to ${ip} failed: ${error}`);
+  broadcastWS({
+    type: 'PEER_CONNECT_FAILED',
+    ip,
+    error: error || 'Connection failed'
+  });
+});
+
 // Connect Abhinav's Frontend to Arnav's Protocol and Aritra's TCP
 wss.on('connection', (ws) => {
   console.log('[Proxy] Frontend React UI connected via WebSocket.');
@@ -181,6 +240,13 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (activeWsClient === ws) activeWsClient = null;
   });
+
+  // Send local client info (username and detected local IP)
+  ws.send(JSON.stringify({
+    type: 'MY_INFO',
+    username,
+    ip: getLocalIp()
+  }));
   // Immediately re-announce all peers that have COMPLETED the ECDH handshake (sessionKey set).
   // Using activePeers (not discovery.peers) as the source of truth so we never expose a peer
   // that is still mid-handshake and can't receive messages yet.
@@ -192,7 +258,7 @@ wss.on('connection', (ws) => {
       peer: {
         id: ip,
         ip: ip,
-        name: discoveredInfo?.username || ip
+        name: peerState.name || discoveredInfo?.username || ip
       }
     }));
   }
@@ -200,8 +266,25 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data);
-      
-      if (msg.type === 'CHAT_MESSAGE') {
+
+      if (msg.type === 'CONNECT_PEER') {
+        const targetIp = (msg.ip || '').trim();
+        if (!targetIp) return;
+        console.log(`[Proxy] Direct TCP connection requested to: ${targetIp}`);
+        const existing = activePeers.get(targetIp);
+        if (existing && existing.sessionKey) {
+          broadcastWS({
+            type: 'PEER_ANNOUNCE',
+            peer: {
+              id: targetIp,
+              ip: targetIp,
+              name: existing.name || discovery.peers.get(targetIp)?.username || targetIp
+            }
+          });
+        } else {
+          transport.connectToPeer(targetIp, TCP_PORT);
+        }
+      } else if (msg.type === 'CHAT_MESSAGE') {
         const { to, text } = msg; // Frontend sends 'to', not 'targetIp'
         const peerState = activePeers.get(to);
         
@@ -251,11 +334,12 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastWS(data) {
-  // Only send to the single active frontend client.
-  // Using wss.clients would hit zombie connections and cause duplicate messages.
-  if (activeWsClient && activeWsClient.readyState === WebSocket.OPEN) {
-    activeWsClient.send(JSON.stringify(data));
-  }
+  const payload = JSON.stringify(data);
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
 }
 
 // Start everything

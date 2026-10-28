@@ -138,8 +138,16 @@ export default function FileTransferBar() {
         <div
           key={t.transferId}
           id={`transfer-${t.transferId}`}
-          className="glass-strong"
-          style={{ borderRadius: 'var(--radius-lg)', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: 'var(--shadow-lg)' }}
+          style={{
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 14px',
+            background: 'var(--color-bg-surface)',
+            border: '1px solid var(--color-border)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            boxShadow: 'var(--shadow-md)',
+          }}
         >
           <div className="flex-between">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, overflow: 'hidden' }}>
