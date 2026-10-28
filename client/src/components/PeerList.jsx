@@ -118,10 +118,11 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
         return exists ? prev.map((p) => (p.id === peer.id ? peer : p)) : [...prev, peer]
       })
 
-      // If this was the IP we were connecting to, auto-select and clear connecting state
+      // If this was the IP we were connecting to, auto-select, clear search and connecting state
       setConnectingIp((curr) => {
         if (curr && (curr === peer.ip || curr === peer.id)) {
           onSelectPeer(peer)
+          setQuery('')
           return null
         }
         return curr
@@ -157,10 +158,10 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
     setErrorMsg(null)
     wsClient.send('CONNECT_PEER', { ip })
 
-    // Reset connecting spinner after 10s if no response
+    // Reset connecting spinner after 5s if no response
     setTimeout(() => {
       setConnectingIp((curr) => (curr === ip ? null : curr))
-    }, 10000)
+    }, 5000)
   }
 
   function handleKeyDown(e) {

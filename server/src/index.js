@@ -334,11 +334,12 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastWS(data) {
-  // Only send to the single active frontend client.
-  // Using wss.clients would hit zombie connections and cause duplicate messages.
-  if (activeWsClient && activeWsClient.readyState === WebSocket.OPEN) {
-    activeWsClient.send(JSON.stringify(data));
-  }
+  const payload = JSON.stringify(data);
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
 }
 
 // Start everything
