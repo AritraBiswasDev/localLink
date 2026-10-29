@@ -224,7 +224,7 @@ export default function ChatWindow({ activePeer }) {
     const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
       if (!peer) return
       setOnlinePeers((prev) => new Set(prev).add(peer.id))
-      flushToPeer(peer.id)
+      // Note: outbox flush only occurs upon verified TCP PEER_CONNECTED
     })
 
     const unsubConnected = wsClient.on(WS_EVENT.PEER_CONNECTED, ({ peer }) => {
@@ -286,13 +286,13 @@ export default function ChatWindow({ activePeer }) {
 
       setMessages((prev) => {
         const peerList = prev[from] || []
-        // Deduplicate messages with identical text received within 2 seconds
+        // Deduplicate messages with identical text received within 4 seconds
         const lastMsg = peerList[peerList.length - 1]
         if (
           lastMsg &&
           lastMsg.from === from &&
           lastMsg.text === text &&
-          Math.abs(msgTs - lastMsg.ts) < 2000
+          Math.abs(msgTs - lastMsg.ts) < 4000
         ) {
           return prev
         }
