@@ -85,13 +85,14 @@ class TransportManager extends EventEmitter {
     if (this.activeSockets.has(ip)) {
       const oldSocket = this.activeSockets.get(ip);
       if (oldSocket && oldSocket !== socket) {
-        if (!oldSocket.destroyed && oldSocket.readyState === 'open' && knownIp === null) {
-          console.log(`[TransportManager] Existing socket to ${ip} is already open. Rejecting redundant inbound connection.`);
+        // If the existing socket is alive and healthy, NEVER destroy it!
+        if (!oldSocket.destroyed && oldSocket.readyState === 'open') {
+          console.log(`[TransportManager] Existing socket to ${ip} is already open. Discarding redundant connection.`);
           socket.removeAllListeners();
           socket.destroy();
           return;
         }
-        console.log(`[TransportManager] Replacing inactive/old TCP socket for ${ip}`);
+        console.log(`[TransportManager] Replacing dead/closed TCP socket for ${ip}`);
         oldSocket.removeAllListeners();
         oldSocket.destroy();
       }

@@ -144,14 +144,21 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
   }, [])
 
   useEffect(() => {
-    const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
+    const handlePeerUpdate = ({ peer }) => {
       if (!peer) return
       setPeers((prev) => {
-        const updated = { ...peer, isOnline: true }
+        const isOnline = peer.isOnline !== false
         const exists = prev.find((p) => p.id === peer.id || p.ip === peer.ip)
-        return exists
-          ? prev.map((p) => (p.id === peer.id || p.ip === peer.ip ? { ...p, ...updated } : p))
-          : [...prev, updated]
+        if (exists) {
+          return prev.map((p) => {
+            if (p.id === peer.id || p.ip === peer.ip) {
+              const bestName = (peer.name && peer.name !== peer.ip) ? peer.name : (p.name || peer.name || peer.ip)
+              return { ...p, ...peer, name: bestName, isOnline }
+            }
+            return p
+          })
+        }
+        return [...prev, { ...peer, isOnline }]
       })
 
       // If this was the IP we were connecting to, auto-select, clear search and connecting state
@@ -163,7 +170,10 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
         }
         return curr
       })
-    })
+    }
+
+    const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, handlePeerUpdate)
+    const unsubConnected = wsClient.on(WS_EVENT.PEER_CONNECTED, handlePeerUpdate)
 
     const unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, ({ peerId }) => {
       // Mark peer as offline instead of removing them from the list
@@ -185,6 +195,7 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
 
     return () => {
       unsubAnnounce()
+      unsubConnected()
       unsubOffline()
       unsubConnectFailed()
     }

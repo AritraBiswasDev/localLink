@@ -19,6 +19,41 @@ function getLocalIp() {
   return '127.0.0.1';
 }
 
+/**
+ * Deterministic IP comparison for peer-to-peer connection tie-breaking.
+ * Strips IPv6-mapped IPv4 prefixes (::ffff:x.x.x.x) and compares numerical octets.
+ * Returns >0 if ip1 > ip2, <0 if ip1 < ip2, 0 if equal.
+ */
+function compareIps(ip1, ip2) {
+  if (!ip1 || !ip2) return 0;
+  const clean1 = ip1.startsWith('::ffff:') ? ip1.slice(7) : ip1;
+  const clean2 = ip2.startsWith('::ffff:') ? ip2.slice(7) : ip2;
+  const p1 = clean1.split('.').map(Number);
+  const p2 = clean2.split('.').map(Number);
+  if (p1.length === 4 && p2.length === 4) {
+    for (let i = 0; i < 4; i++) {
+      if (p1[i] > p2[i]) return 1;
+      if (p1[i] < p2[i]) return -1;
+    }
+    return 0;
+  }
+  return clean1.localeCompare(clean2);
+}
+
+/**
+ * Deterministically selects whether this local node should initiate the outbound
+ * TCP connection or wait for the peer's inbound connection.
+ * The node with the numerically higher IP initiates the connection.
+ * If testing locally on the same IP, the node with the higher TCP port initiates.
+ */
+function shouldInitiateConnection(remoteIp, remotePort) {
+  const localIp = getLocalIp();
+  const cmp = compareIps(localIp, remoteIp);
+  if (cmp > 0) return true;
+  if (cmp < 0) return false;
+  return TCP_PORT > (remotePort || 9000);
+}
+
 // Configuration
 const TCP_PORT = 9000;
 const UDP_PORT = 9001;
@@ -45,32 +80,62 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 });
 
 // State Management
-const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, sessionId, localKeyPair }
+const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, sessionId, localKeyPair, name }
 const activeTransfers = new Map(); // transferId -> ip
-const offlineMessageQueue = new Map(); // ip -> [ { text } ]
+const offlineMessageQueue = new Map(); // ip -> Map(id -> { text, id })
+const recentlySentMessageIds = new Map(); // id -> timestamp (TTL 60s to prevent duplicate wire transmission)
+const inboxBuffer = []; // [ { type, from, text, ts } ] Buffers incoming messages when UI is disconnected/reloading
 let activeWsClient = null; // Single active frontend WebSocket connection
+
+function markMessageSent(id) {
+  if (!id) return;
+  recentlySentMessageIds.set(id, Date.now());
+  if (recentlySentMessageIds.size > 300) {
+    const cutoff = Date.now() - 60000;
+    for (const [mid, time] of recentlySentMessageIds.entries()) {
+      if (time < cutoff) recentlySentMessageIds.delete(mid);
+    }
+  }
+}
 
 function flushOfflineMessages(ip, peerState) {
   if (offlineMessageQueue.has(ip) && peerState.sessionKey && peerState.sessionId && peerState.socket && !peerState.socket.destroyed) {
-    const queue = offlineMessageQueue.get(ip);
-    console.log(`[Proxy] Flushing ${queue.length} offline queued message(s) to ${ip}`);
-    while (queue.length > 0) {
-      const item = queue.shift();
-      const text = item.text || item;
-      const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
-      const packet = MessageBuilder.build(
-        OPCODES.CHAT_MESSAGE,
-        Math.floor(Date.now() / 1000) % 4294967295,
-        peerState.sessionId,
-        encryptedPayload
-      );
-      peerState.socket.write(packet);
-      broadcastWS({
-        type: 'MESSAGE_SENT',
-        to: ip,
-        id: item.id,
-        text
-      });
+    const queueMap = offlineMessageQueue.get(ip);
+    const items = Array.from(queueMap.values());
+    if (items.length > 0) {
+      console.log(`[Proxy] Flushing ${items.length} offline queued message(s) to ${ip}`);
+      for (const item of items) {
+        const text = item.text || item;
+        const id = item.id;
+
+        // If this message was already sent over TCP recently, acknowledge to frontend without duplicate wire packet
+        if (id && recentlySentMessageIds.has(id)) {
+          broadcastWS({
+            type: 'MESSAGE_SENT',
+            to: ip,
+            id,
+            text
+          });
+          continue;
+        }
+
+        const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
+        const packet = MessageBuilder.build(
+          OPCODES.CHAT_MESSAGE,
+          Math.floor(Date.now() / 1000) % 4294967295,
+          peerState.sessionId,
+          encryptedPayload
+        );
+        peerState.socket.write(packet);
+        if (id) markMessageSent(id);
+
+        broadcastWS({
+          type: 'MESSAGE_SENT',
+          to: ip,
+          id,
+          text
+        });
+      }
     }
     offlineMessageQueue.delete(ip);
   }
@@ -82,7 +147,7 @@ discovery.on('peerFound', (peerInfo) => {
   const ip = peerInfo.ip;
   console.log(`[Proxy] Found peer: ${peerInfo.username} at ${ip}:${peerInfo.tcpPort}`);
   
-  // Notify frontend
+  // Notify frontend immediately with username
   broadcastWS({
     type: 'PEER_ANNOUNCE',
     peer: {
@@ -92,9 +157,25 @@ discovery.on('peerFound', (peerInfo) => {
     }
   });
 
-  // Automatically attempt TCP connection
-  if (!activePeers.has(ip)) {
-    transport.connectToPeer(ip, peerInfo.tcpPort);
+  // Automatically attempt TCP connection only if we are the designated initiator
+  if (!activePeers.has(ip) && !transport.pendingSockets.has(ip) && !transport.activeSockets.has(ip)) {
+    if (shouldInitiateConnection(ip, peerInfo.tcpPort)) {
+      console.log(`[Proxy] Initiating mesh TCP connection to ${ip}:${peerInfo.tcpPort} (higher IP tie-breaker)`);
+      transport.connectToPeer(ip, peerInfo.tcpPort);
+    } else {
+      console.log(`[Proxy] Awaiting inbound mesh TCP connection from ${ip}:${peerInfo.tcpPort} (lower IP tie-breaker)`);
+    }
+  }
+});
+
+// Periodic heartbeat from UDP discovery ensures auto-reconnect if a socket dropped
+discovery.on('peerHeartbeat', (peerInfo) => {
+  const ip = peerInfo.ip;
+  if (!activePeers.has(ip) && !transport.pendingSockets.has(ip) && !transport.activeSockets.has(ip)) {
+    if (shouldInitiateConnection(ip, peerInfo.tcpPort)) {
+      console.log(`[Proxy] Auto-reconnecting mesh TCP connection to ${peerInfo.username} at ${ip}:${peerInfo.tcpPort}`);
+      transport.connectToPeer(ip, peerInfo.tcpPort);
+    }
   }
 });
 
@@ -169,7 +250,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         peer: {
           id: ip,
           ip: ip,
-          name: peerState.name || ip,
+          name: peerState.name || discovery.peers.get(ip)?.username || ip,
           isOnline: true
         }
       });
@@ -200,7 +281,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         peer: {
           id: ip,
           ip: ip,
-          name: peerState.name || ip,
+          name: peerState.name || discovery.peers.get(ip)?.username || ip,
           isOnline: true
         }
       });
@@ -244,12 +325,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
           }
         });
       } else if (msg.opcode === OPCODES.CHAT_MESSAGE) {
-        broadcastWS({
+        const chatData = {
           type: 'CHAT_MESSAGE',
           from: ip, // The frontend expects 'from', not 'sender'
           text: plaintext.toString(),
           ts: Date.now() // Frontend uses this for message timestamps
-        });
+        };
+        inboxBuffer.push(chatData);
+        if (inboxBuffer.length > 500) inboxBuffer.shift();
+        console.log(`[Proxy] Chat message from ${ip}: "${chatData.text}"`);
+        broadcastWS(chatData);
       } else if (msg.opcode === OPCODES.TYPING_START) {
         broadcastWS({ type: 'TYPING_START', from: ip });
       } else if (msg.opcode === OPCODES.TYPING_STOP) {
@@ -322,19 +407,43 @@ wss.on('connection', (ws) => {
     ip: getLocalIp()
   }));
   // Immediately re-announce all peers that have COMPLETED the ECDH handshake (sessionKey set).
-  // Using activePeers (not discovery.peers) as the source of truth so we never expose a peer
-  // that is still mid-handshake and can't receive messages yet.
+  // Also announce any peers discovered via UDP that are pending connection.
+  const announcedIps = new Set();
   for (const [ip, peerState] of activePeers.entries()) {
-    if (!peerState.sessionKey) continue; // skip peers still mid-handshake
+    if (!peerState.sessionKey) continue;
+    announcedIps.add(ip);
     const discoveredInfo = discovery.peers.get(ip);
     ws.send(JSON.stringify({
-      type: 'PEER_ANNOUNCE',
+      type: 'PEER_CONNECTED',
       peer: {
         id: ip,
         ip: ip,
-        name: peerState.name || discoveredInfo?.username || ip
+        name: peerState.name || discoveredInfo?.username || ip,
+        isOnline: true
       }
     }));
+  }
+
+  for (const [ip, peerInfo] of discovery.peers.entries()) {
+    if (!announcedIps.has(ip)) {
+      ws.send(JSON.stringify({
+        type: 'PEER_ANNOUNCE',
+        peer: {
+          id: ip,
+          ip: ip,
+          name: peerInfo.username || ip,
+          isOnline: false
+        }
+      }));
+    }
+  }
+
+  // Flush any incoming messages received while frontend was loading/reconnecting
+  if (inboxBuffer.length > 0) {
+    console.log(`[Proxy] Delivering ${inboxBuffer.length} buffered incoming message(s) to connected frontend UI`);
+    inboxBuffer.forEach((chatMsg) => {
+      ws.send(JSON.stringify(chatMsg));
+    });
   }
 
   ws.on('message', (data) => {
@@ -362,6 +471,17 @@ wss.on('connection', (ws) => {
         const { to, text, id } = msg; // Frontend sends 'to', 'text', 'id'
         const peerState = activePeers.get(to);
         
+        // If this message was already sent over TCP recently, acknowledge to frontend without sending duplicate packet
+        if (id && recentlySentMessageIds.has(id)) {
+          broadcastWS({
+            type: 'MESSAGE_SENT',
+            to,
+            id,
+            text
+          });
+          return;
+        }
+
         if (peerState && peerState.sessionKey && peerState.sessionId && !peerState.socket.destroyed) {
           const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
           const packet = MessageBuilder.build(
@@ -371,6 +491,7 @@ wss.on('connection', (ws) => {
             encryptedPayload
           );
           peerState.socket.write(packet);
+          if (id) markMessageSent(id);
           broadcastWS({
             type: 'MESSAGE_SENT',
             to,
@@ -379,9 +500,10 @@ wss.on('connection', (ws) => {
           });
         } else {
           console.log(`[Proxy] Peer ${to} not connected right now. Queueing message for reconnection.`);
-          if (!offlineMessageQueue.has(to)) offlineMessageQueue.set(to, []);
-          offlineMessageQueue.get(to).push({ text, id });
-          if (!activePeers.has(to)) {
+          if (!offlineMessageQueue.has(to)) offlineMessageQueue.set(to, new Map());
+          const key = id || `temp-${Date.now()}-${Math.random()}`;
+          offlineMessageQueue.get(to).set(key, { text, id });
+          if (!activePeers.has(to) && !transport.pendingSockets.has(to)) {
             transport.connectToPeer(to, TCP_PORT);
           }
         }

@@ -71,6 +71,8 @@ class PeerDiscovery extends EventEmitter {
             this.emit('peerFound', { ip: rinfo.address, ...peerInfo });
           }
         }
+        // Emit heartbeat on every valid broadcast so transport can auto-reconnect if dropped
+        this.emit('peerHeartbeat', { ip: rinfo.address, ...peerInfo });
       } catch (err) {
         // Ignore invalid broadcast messages
       }
