@@ -51,11 +51,12 @@ const offlineMessageQueue = new Map(); // ip -> [ { text } ]
 let activeWsClient = null; // Single active frontend WebSocket connection
 
 function flushOfflineMessages(ip, peerState) {
-  if (offlineMessageQueue.has(ip) && peerState.sessionKey && peerState.sessionId) {
+  if (offlineMessageQueue.has(ip) && peerState.sessionKey && peerState.sessionId && peerState.socket && !peerState.socket.destroyed) {
     const queue = offlineMessageQueue.get(ip);
     console.log(`[Proxy] Flushing ${queue.length} offline queued message(s) to ${ip}`);
     while (queue.length > 0) {
-      const { text } = queue.shift();
+      const item = queue.shift();
+      const text = item.text || item;
       const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
       const packet = MessageBuilder.build(
         OPCODES.CHAT_MESSAGE,
@@ -64,6 +65,12 @@ function flushOfflineMessages(ip, peerState) {
         encryptedPayload
       );
       peerState.socket.write(packet);
+      broadcastWS({
+        type: 'MESSAGE_SENT',
+        to: ip,
+        id: item.id,
+        text
+      });
     }
     offlineMessageQueue.delete(ip);
   }
@@ -100,11 +107,17 @@ discovery.on('peerOffline', (ip) => {
 transport.on('connection', ({ ip, socket, isOutbound }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
   
-  // Clean up any old duplicate session for this IP to prevent duplicate message delivery!
+  // Protect existing authenticated sessions from collision teardowns
   if (activePeers.has(ip)) {
     const existing = activePeers.get(ip);
+    if (existing && existing.sessionKey && existing.socket && !existing.socket.destroyed) {
+      console.log(`[Proxy] Active secure session already established with ${ip}. Closing redundant incoming socket.`);
+      socket.removeAllListeners();
+      socket.destroy();
+      return;
+    }
     if (existing && existing.socket && existing.socket !== socket) {
-      console.log(`[Proxy] Closing old duplicate TCP socket for ${ip}`);
+      console.log(`[Proxy] Closing old unauthenticated socket for ${ip}`);
       existing.socket.removeAllListeners();
       existing.socket.destroy();
     }
@@ -150,6 +163,17 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         namePayload
       );
       socket.write(namePacket);
+      
+      broadcastWS({
+        type: 'PEER_CONNECTED',
+        peer: {
+          id: ip,
+          ip: ip,
+          name: peerState.name || ip,
+          isOnline: true
+        }
+      });
+
       flushOfflineMessages(ip, peerState);
       return;
     }
@@ -170,6 +194,17 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         namePayload
       );
       socket.write(namePacket);
+
+      broadcastWS({
+        type: 'PEER_CONNECTED',
+        peer: {
+          id: ip,
+          ip: ip,
+          name: peerState.name || ip,
+          isOnline: true
+        }
+      });
+
       flushOfflineMessages(ip, peerState);
       return;
     }
@@ -324,7 +359,7 @@ wss.on('connection', (ws) => {
           transport.connectToPeer(targetIp, TCP_PORT);
         }
       } else if (msg.type === 'CHAT_MESSAGE') {
-        const { to, text } = msg; // Frontend sends 'to', not 'targetIp'
+        const { to, text, id } = msg; // Frontend sends 'to', 'text', 'id'
         const peerState = activePeers.get(to);
         
         if (peerState && peerState.sessionKey && peerState.sessionId && !peerState.socket.destroyed) {
@@ -336,10 +371,16 @@ wss.on('connection', (ws) => {
             encryptedPayload
           );
           peerState.socket.write(packet);
+          broadcastWS({
+            type: 'MESSAGE_SENT',
+            to,
+            id,
+            text
+          });
         } else {
           console.log(`[Proxy] Peer ${to} not connected right now. Queueing message for reconnection.`);
           if (!offlineMessageQueue.has(to)) offlineMessageQueue.set(to, []);
-          offlineMessageQueue.get(to).push({ text });
+          offlineMessageQueue.get(to).push({ text, id });
           if (!activePeers.has(to)) {
             transport.connectToPeer(to, TCP_PORT);
           }

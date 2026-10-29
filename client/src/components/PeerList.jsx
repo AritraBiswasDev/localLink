@@ -40,6 +40,8 @@ function PeerAvatar({ name }) {
 }
 
 function PeerRow({ peer, isActive, onClick, unread }) {
+  const isOnline = peer.isOnline !== false
+
   return (
     <button
       id={`peer-${peer.id}`}
@@ -58,12 +60,14 @@ function PeerRow({ peer, isActive, onClick, unread }) {
           : '1px solid transparent',
         cursor: 'pointer',
         transition: 'all var(--transition-fast)',
+        opacity: isOnline ? 1 : 0.72,
       }}
     >
       <div style={{ position: 'relative' }}>
         <PeerAvatar name={peer.name} />
         <span
-          className="status-dot online"
+          className={`status-dot ${isOnline ? 'online' : 'idle'}`}
+          title={isOnline ? 'Online' : 'Offline'}
           style={{ position: 'absolute', bottom: -1, right: -1, width: 6, height: 6, border: '1.5px solid var(--color-bg-surface)' }}
         />
       </div>
@@ -71,8 +75,11 @@ function PeerRow({ peer, isActive, onClick, unread }) {
         <div style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--color-text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {peer.name}
         </div>
-        <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
-          {peer.ip}
+        <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>{peer.ip}</span>
+          {!isOnline && (
+            <span style={{ fontSize: '0.62rem', color: 'var(--color-text-muted)', opacity: 0.8 }}>• Offline</span>
+          )}
         </div>
       </div>
       {unread > 0 && (
@@ -100,11 +107,29 @@ function PeerRow({ peer, isActive, onClick, unread }) {
 }
 
 export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }) {
-  const [peers, setPeers] = useState([])
+  const [peers, setPeers] = useState(() => {
+    try {
+      const saved = localStorage.getItem('locallink_known_peers')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        return parsed.map((p) => ({ ...p, isOnline: false }))
+      }
+      return []
+    } catch {
+      return []
+    }
+  })
   const [query, setQuery] = useState('')
   const [connectingIp, setConnectingIp] = useState(null)
   const [errorMsg, setErrorMsg] = useState(null)
   const searchInputRef = useRef(null)
+
+  // Persist known peers list across reloads
+  useEffect(() => {
+    if (peers.length > 0) {
+      localStorage.setItem('locallink_known_peers', JSON.stringify(peers))
+    }
+  }, [peers])
 
   // Global keyboard shortcut: Ctrl+K or / to focus search
   useEffect(() => {
@@ -122,8 +147,11 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
     const unsubAnnounce = wsClient.on(WS_EVENT.PEER_ANNOUNCE, ({ peer }) => {
       if (!peer) return
       setPeers((prev) => {
-        const exists = prev.find((p) => p.id === peer.id)
-        return exists ? prev.map((p) => (p.id === peer.id ? peer : p)) : [...prev, peer]
+        const updated = { ...peer, isOnline: true }
+        const exists = prev.find((p) => p.id === peer.id || p.ip === peer.ip)
+        return exists
+          ? prev.map((p) => (p.id === peer.id || p.ip === peer.ip ? { ...p, ...updated } : p))
+          : [...prev, updated]
       })
 
       // If this was the IP we were connecting to, auto-select, clear search and connecting state
@@ -138,7 +166,10 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
     })
 
     const unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, ({ peerId }) => {
-      setPeers((prev) => prev.filter((p) => p.id !== peerId))
+      // Mark peer as offline instead of removing them from the list
+      setPeers((prev) =>
+        prev.map((p) => (p.id === peerId || p.ip === peerId ? { ...p, isOnline: false } : p))
+      )
     })
 
     const unsubConnectFailed = wsClient.on(WS_EVENT.PEER_CONNECT_FAILED, ({ ip, error }) => {
@@ -228,7 +259,7 @@ export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }
         </span>
         {peers.length > 0 && (
           <span className="badge badge-online" style={{ fontSize: '0.65rem', padding: '1px 5px' }}>
-            {peers.length} online
+            {peers.filter((p) => p.isOnline !== false).length} online
           </span>
         )}
       </div>
