@@ -84,6 +84,7 @@ const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, session
 const activeTransfers = new Map(); // transferId -> ip
 const offlineMessageQueue = new Map(); // ip -> Map(id -> { text, id })
 const recentlySentMessageIds = new Map(); // id -> timestamp (TTL 60s to prevent duplicate wire transmission)
+const inboxBuffer = []; // [ { type, from, text, ts } ] Buffers incoming messages when UI is disconnected/reloading
 let activeWsClient = null; // Single active frontend WebSocket connection
 
 function markMessageSent(id) {
@@ -324,12 +325,16 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
           }
         });
       } else if (msg.opcode === OPCODES.CHAT_MESSAGE) {
-        broadcastWS({
+        const chatData = {
           type: 'CHAT_MESSAGE',
           from: ip, // The frontend expects 'from', not 'sender'
           text: plaintext.toString(),
           ts: Date.now() // Frontend uses this for message timestamps
-        });
+        };
+        inboxBuffer.push(chatData);
+        if (inboxBuffer.length > 500) inboxBuffer.shift();
+        console.log(`[Proxy] Chat message from ${ip}: "${chatData.text}"`);
+        broadcastWS(chatData);
       } else if (msg.opcode === OPCODES.TYPING_START) {
         broadcastWS({ type: 'TYPING_START', from: ip });
       } else if (msg.opcode === OPCODES.TYPING_STOP) {
@@ -431,6 +436,14 @@ wss.on('connection', (ws) => {
         }
       }));
     }
+  }
+
+  // Flush any incoming messages received while frontend was loading/reconnecting
+  if (inboxBuffer.length > 0) {
+    console.log(`[Proxy] Delivering ${inboxBuffer.length} buffered incoming message(s) to connected frontend UI`);
+    inboxBuffer.forEach((chatMsg) => {
+      ws.send(JSON.stringify(chatMsg));
+    });
   }
 
   ws.on('message', (data) => {
