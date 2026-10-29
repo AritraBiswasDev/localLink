@@ -30,6 +30,14 @@ function playNotificationChime() {
 
 function MessageBubble({ msg, isMine }) {
   const isPending = msg.status === 'pending'
+  const isFailed = msg.status === 'failed'
+
+  let bubbleBg = isMine ? 'var(--color-accent)' : 'var(--color-bg-elevated)'
+  let bubbleBorder = isMine ? '1px solid transparent' : '1px solid var(--color-border)'
+  if (isFailed) {
+    bubbleBg = 'rgba(239, 68, 68, 0.12)'
+    bubbleBorder = '1px solid rgba(239, 68, 68, 0.4)'
+  }
 
   return (
     <div
@@ -44,19 +52,15 @@ function MessageBubble({ msg, isMine }) {
           maxWidth: '72%',
           padding: '8px 12px',
           borderRadius: 'var(--radius-md)',
-          background: isMine
-            ? 'var(--color-accent)'
-            : 'var(--color-bg-elevated)',
-          border: isMine
-            ? '1px solid transparent'
-            : '1px solid var(--color-border)',
+          background: bubbleBg,
+          border: bubbleBorder,
           opacity: isPending ? 0.85 : 1,
         }}
       >
         <p
           style={{
             fontSize: '0.875rem',
-            color: isMine ? '#ffffff' : 'var(--color-text-primary)',
+            color: isFailed ? '#ef4444' : isMine ? '#ffffff' : 'var(--color-text-primary)',
             lineHeight: 1.5,
             margin: 0,
             wordBreak: 'break-word',
@@ -67,7 +71,7 @@ function MessageBubble({ msg, isMine }) {
         <div
           style={{
             fontSize: '0.65rem',
-            color: isMine ? 'rgba(255,255,255,0.7)' : 'var(--color-text-muted)',
+            color: isFailed ? '#ef4444' : isMine ? 'rgba(255,255,255,0.7)' : 'var(--color-text-muted)',
             marginTop: 4,
             display: 'flex',
             alignItems: 'center',
@@ -83,6 +87,13 @@ function MessageBubble({ msg, isMine }) {
                 style={{ fontSize: '0.75rem', display: 'flex', alignItems: 'center' }}
               >
                 🕒
+              </span>
+            ) : isFailed ? (
+              <span
+                title="Failed — peer is offline"
+                style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 'bold', display: 'flex', alignItems: 'center' }}
+              >
+                ✕
               </span>
             ) : (
               <span title="Delivered via encrypted TCP">✓</span>
@@ -187,7 +198,7 @@ export default function ChatWindow({ activePeer }) {
   const peerId = activePeer?.id
   const peerMessages = (peerId && messages[peerId]) || []
   const isPeerTyping = peerId && typingPeers.has(peerId)
-  const isPeerOnline = peerId ? onlinePeers.has(peerId) : false
+  const isPeerOnline = Boolean(peerId && (onlinePeers.has(peerId) || activePeer?.isOnline === true) && activePeer?.isOnline !== false)
 
   // 2. Save chats to local storage
   useEffect(() => {
@@ -434,6 +445,23 @@ export default function ChatWindow({ activePeer }) {
 
   // --- FILE TRANSFER WITH 50MB LIMIT ---
   function triggerFileSelect() {
+    if (!isPeerOnline) {
+      setMessages((prev) => ({
+        ...prev,
+        [peerId]: [
+          ...(prev[peerId] || []),
+          {
+            from: 'me',
+            to: peerId,
+            text: `❌ Cannot send files: ${activePeer?.name || peerId} is offline. Live connection required for transfers.`,
+            ts: Date.now(),
+            id: `fail-${Date.now()}`,
+            status: 'failed',
+          },
+        ],
+      }))
+      return
+    }
     fileInputRef.current?.click()
   }
 
@@ -441,6 +469,24 @@ export default function ChatWindow({ activePeer }) {
     const file = e.target.files?.[0]
     if (!file || !peerId) return
     e.target.value = '' // reset input
+
+    if (!isPeerOnline) {
+      setMessages((prev) => ({
+        ...prev,
+        [peerId]: [
+          ...(prev[peerId] || []),
+          {
+            from: 'me',
+            to: peerId,
+            text: `❌ Cannot send "${file.name}": ${activePeer?.name || peerId} is offline. Live connection required for transfers.`,
+            ts: Date.now(),
+            id: `fail-${Date.now()}`,
+            status: 'failed',
+          },
+        ],
+      }))
+      return
+    }
 
     // 50 MB Campus Safety Limit
     const MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -450,7 +496,7 @@ export default function ChatWindow({ activePeer }) {
         ...prev,
         [peerId]: [
           ...(prev[peerId] || []),
-          { from: 'me', to: peerId, text: warningText, ts: Date.now(), id: `warn-${Date.now()}`, status: 'sent' },
+          { from: 'me', to: peerId, text: warningText, ts: Date.now(), id: `warn-${Date.now()}`, status: 'failed' },
         ],
       }))
       return
@@ -470,15 +516,15 @@ export default function ChatWindow({ activePeer }) {
     const msgId = `me-${Date.now()}`
     setMessages((prev) => ({
       ...prev,
-      [peerId]: [...(prev[peerId] || []), { from: 'me', to: peerId, text: `📎 Offering: ${file.name} (Waiting for accept…)`, ts: Date.now(), id: msgId, status: 'sent' }],
+      [peerId]: [...(prev[peerId] || []), { from: 'me', to: peerId, text: `📎 Offering: ${file.name} (Waiting for accept…)`, ts: Date.now(), id: msgId, status: 'pending' }],
     }))
 
-    const updateProgressMsg = (text) => {
+    const updateProgressMsg = (text, status = 'pending') => {
       setMessages((prev) => {
         const peerMsgs = prev[peerId] || []
         return {
           ...prev,
-          [peerId]: peerMsgs.map(m => m.id === msgId ? { ...m, text } : m)
+          [peerId]: peerMsgs.map(m => m.id === msgId ? { ...m, text, status } : m)
         }
       })
     }
@@ -513,57 +559,62 @@ export default function ChatWindow({ activePeer }) {
       unsubReject  = wsClient.on(WS_EVENT.FILE_REJECT,  handleReject)
       unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, handleOffline)
 
-      timeoutHandle = setTimeout(() => settle(false), 60_000)
+      // Fast 15-second timeout if receiver doesn't accept or is unreachable
+      timeoutHandle = setTimeout(() => settle(false), 15_000)
     })
 
     if (!isAccepted) {
-      updateProgressMsg(`❌ Transfer rejected or timed out: ${file.name}`)
+      updateProgressMsg(`❌ Transfer rejected or peer unreachable: ${file.name}`, 'failed')
       return
     }
 
-    updateProgressMsg(`📎 Sending: ${file.name} (0%)`)
+    updateProgressMsg(`📎 Sending: ${file.name} (0%)`, 'pending')
 
     // 3. Stream Chunks
     const CHUNK_SIZE = 256 * 1024 // 256KB
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
 
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE
-      const end = Math.min(start + CHUNK_SIZE, file.size)
-      const blob = file.slice(start, end)
-      
-      const arrayBuffer = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = reject
-        reader.readAsArrayBuffer(blob)
-      })
-      
-      let binary = ''
-      const bytes = new Uint8Array(arrayBuffer)
-      const len = bytes.byteLength
-      for (let j = 0; j < len; j++) {
-        binary += String.fromCharCode(bytes[j])
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE
+        const end = Math.min(start + CHUNK_SIZE, file.size)
+        const blob = file.slice(start, end)
+        
+        const arrayBuffer = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result)
+          reader.onerror = reject
+          reader.readAsArrayBuffer(blob)
+        })
+        
+        let binary = ''
+        const bytes = new Uint8Array(arrayBuffer)
+        const len = bytes.byteLength
+        for (let j = 0; j < len; j++) {
+          binary += String.fromCharCode(bytes[j])
+        }
+        const base64Chunk = btoa(binary)
+
+        await wsClient.waitDrained(1 * 1024 * 1024)
+
+        wsClient.send('FILE_CHUNK', {
+          to: peerId,
+          transferId,
+          chunkIndex: i,
+          totalChunks,
+          data: base64Chunk
+        })
+
+        const percent = Math.round(((i + 1) / totalChunks) * 100)
+        updateProgressMsg(`📎 Sending: ${file.name} (${percent}%)`, 'pending')
       }
-      const base64Chunk = btoa(binary)
 
-      await wsClient.waitDrained(1 * 1024 * 1024)
-
-      wsClient.send('FILE_CHUNK', {
-        to: peerId,
-        transferId,
-        chunkIndex: i,
-        totalChunks,
-        data: base64Chunk
-      })
-
-      const percent = Math.round(((i + 1) / totalChunks) * 100)
-      updateProgressMsg(`📎 Sending: ${file.name} (${percent}%)`)
+      await wsClient.waitDrained(0)
+      wsClient.send('FILE_COMPLETE', { to: peerId, transferId })
+      updateProgressMsg(`✅ Sent: ${file.name}`, 'sent')
+    } catch {
+      updateProgressMsg(`❌ Transfer interrupted: ${file.name}`, 'failed')
     }
-
-    await wsClient.waitDrained(0)
-    wsClient.send('FILE_COMPLETE', { to: peerId, transferId })
-    updateProgressMsg(`✅ Sent: ${file.name}`)
   }
 
   return (
@@ -684,8 +735,15 @@ export default function ChatWindow({ activePeer }) {
           <button
             className="btn btn-ghost btn-icon"
             onClick={triggerFileSelect}
-            title="Send file (max 50 MB)"
-            style={{ flexShrink: 0, width: 38, height: 38, color: 'var(--color-text-muted)' }}
+            title={isPeerOnline ? "Send file (max 50 MB)" : "File transfer unavailable while peer is offline"}
+            style={{
+              flexShrink: 0,
+              width: 38,
+              height: 38,
+              color: 'var(--color-text-muted)',
+              opacity: isPeerOnline ? 1 : 0.45,
+              cursor: isPeerOnline ? 'pointer' : 'not-allowed',
+            }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
