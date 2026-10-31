@@ -1,28 +1,31 @@
+<div align="center">
+
 # LocalLink
 
 > **Secure, zero-configuration peer-to-peer chat and file transfer for your local network.**  
 > No cloud. No accounts. No internet. Just your LAN.
+
+<br>
 
 ![Tech](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)
 ![Tech](https://img.shields.io/badge/Node.js-TCP%20Proxy-339933?style=flat-square&logo=node.js)
 ![Security](https://img.shields.io/badge/E2EE-X25519%20%2B%20AES--256--GCM-6366f1?style=flat-square&logo=shield)
 ![Protocol](https://img.shields.io/badge/Protocol-Custom%20Binary-22d3ee?style=flat-square)
 
+</div>
+
 ---
 
 ## Table of Contents
 
-1. [What is LocalLink?](#what-is-locallink)
-2. [Features](#features)
-3. [Architecture Overview](#architecture-overview)
-4. [Security & Encryption (E2EE)](#security--encryption-e2ee)
-5. [Binary Protocol Specification](#binary-protocol-specification)
-6. [Project Structure](#project-structure)
-7. [Getting Started](#getting-started)
-8. [Running the App](#running-the-app)
-9. [Module Reference](#module-reference)
-10. [Known Limitations](#known-limitations)
-11. [Port Reference](#port-reference)
+|   #    | Section                                                         |   #    | Section                                            |
+| :----: | :-------------------------------------------------------------- | :----: | :------------------------------------------------- |
+| **01** | [What is LocalLink?](#what-is-locallink)                        | **07** | [Getting Started](#getting-started)                |
+| **02** | [Features](#features)                                           | **08** | [Running the App](#running-the-app)                |
+| **03** | [Architecture Overview](#architecture-overview)                 | **09** | [Module Reference](#module-reference)              |
+| **04** | [Security & Encryption (E2EE)](#security--encryption-e2ee)       | **10** | [Known Limitations](#known-limitations)            |
+| **05** | [Binary Protocol Specification](#binary-protocol-specification) | **11** | [Port Reference](#port-reference)                  |
+| **06** | [Project Structure](#project-structure)                         |        |                                                    |
 
 ---
 
@@ -44,43 +47,45 @@ The LAN is treated as a **hostile network**. All payloads are encrypted before t
 
 ## Features
 
-| Feature | Details |
-|---|---|
-| 🔍 **Auto peer discovery** | UDP broadcast — peers appear automatically, no IP entry needed |
-| 💬 **Real-time chat** | Encrypted TCP messages with optimistic local rendering |
-| ⌨️ **Typing indicators** | Live "is typing…" bubbles, debounced to one packet per session |
-| 📎 **File transfer** | Chunked (256 KB/chunk), base64-encoded, with Accept/Reject UI |
-| 🔒 **E2EE** | X25519 key exchange + AES-256-GCM per connection |
-| 🆔 **Session integrity** | 32-byte session ID validated on every packet |
-| 📶 **Auto-reconnect** | WS client reconnects with exponential backoff (1 s → 30 s cap) |
-| 🟢 **Connection status** | Live badge: Connected / Connecting / Reconnecting / Offline |
-| 🔔 **Unread badges** | WhatsApp-style unread count per peer in the sidebar |
-| 💾 **Persistent history** | Chat history saved to `localStorage` per session |
-| 🛡️ **DoS protection** | 100 MB max payload enforced in the message parser |
+| Feature                    | Details                                                         |
+| :------------------------- | :-------------------------------------------------------------- |
+| 🔍 **Auto peer discovery** | UDP broadcast — peers appear automatically, no IP entry needed  |
+| 💬 **Real-time chat**        | Encrypted TCP messages with optimistic local rendering          |
+| ⌨️ **Typing indicators**    | Live "is typing…" bubbles, debounced to one packet per session  |
+| 📎 **File transfer**        | Chunked (256 KB/chunk), base64-encoded, with Accept/Reject UI   |
+| 🔒 **E2EE**                 | X25519 key exchange + AES-256-GCM per connection                |
+| 🆔 **Session integrity**    | 32-byte session ID validated on every packet                    |
+| 📶 **Auto-reconnect**       | WS client reconnects with exponential backoff (1 s → 30 s cap)  |
+| 🟢 **Connection status**    | Live badge: Connected / Connecting / Reconnecting / Offline     |
+| 🔔 **Unread badges**        | WhatsApp-style unread count per peer in the sidebar             |
+| 💾 **Persistent history**   | Chat history saved to `localStorage` per session                |
+| 🛡️ **DoS protection**       | 100 MB max payload enforced in the message parser               |
 
 ---
 
 ## Architecture Overview
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   Your Machine                         │
-│                                                        │
-│  ┌─────────────────┐        ┌────────────────────────┐ │
-│  │  React Frontend │◄──WS──►│  Node.js Proxy Server  │ │
-│  │  (Vite, :3000)  │        │  (:9002 WS)            │ │
-│  └─────────────────┘        │  (:9000 TCP)           │ │
-│                             │  (:9001 UDP)           │ │
-│                             └────────┬───────────────┘ │
-└──────────────────────────────────────┼─────────────────┘
-                                       │ LAN
-                    ┌──────────────────┼──────────────────┐
-                    │                  │                   │
-             TCP :9000          UDP :9001 broadcast     TCP :9000
-                    │                  │                   │
-              ┌─────┴────┐       ┌─────┴────┐       ┌─────┴────┐
-              │  Peer A  │       │  Peer B  │       │  Peer C  │
-              └──────────┘       └──────────┘       └──────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           Your Machine                           │
+│                                                                  │
+│   ┌────────────────────────┐        ┌────────────────────────┐   │
+│   │     React Frontend     │◄──WS──►│  Node.js Proxy Server  │   │
+│   │     (Vite, :3000)      │        │  (:9002 WS)            │   │
+│   │                        │        │  (:9000 TCP)           │   │
+│   │                        │        │  (:9001 UDP)           │   │
+│   └────────────────────────┘        └───────────┬────────────┘   │
+│                                                 │                │
+│                                 ┌───────────────┘                │
+└─────────────────────────────────┼────────────────────────────────┘
+                                  │ LAN
+                  ┌───────────────┼───────────────┐
+                  │               │               │
+              TCP :9000  UDP :9001 broadcast  TCP :9000
+                  │               │               │
+            ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
+            │  Peer A   │   │  Peer B   │   │  Peer C   │
+            └───────────┘   └───────────┘   └───────────┘
 ```
 
 ### Data Flow
@@ -119,15 +124,16 @@ When a TCP connection is established, the **initiator** (outbound connector) sen
 Both sides compute the same **32-byte shared secret** using `crypto.diffieHellman()`. This shared secret becomes the **AES-256 session key**.
 
 ```
-Initiator                          Responder
-    │                                  │
-    │──── HANDSHAKE_INIT (pubKey) ────►│
-    │                                  │  derives shared secret
-    │◄─── HANDSHAKE_ACK (pubKey)  ─────│
-    │                                  │
-    │  derives shared secret           │
-    │                                  │
-    │════ AES-256-GCM encrypted ═══════│
+Initiator                                Responder
+    │                                        │
+    │──────── HANDSHAKE_INIT (pubKey) ──────►│
+    │                                        │  derives shared secret
+    │                                        │
+    │◄─────── HANDSHAKE_ACK (pubKey) ────────│
+    │                                        │
+    │  derives shared secret                 │
+    │                                        │
+    │════════ AES-256-GCM encrypted ═════════│
 ```
 
 Key pairs are **ephemeral** — generated fresh on each TCP connection. Forward secrecy is provided naturally: compromising one session key does not expose any other session.
@@ -163,13 +169,13 @@ This prevents session hijacking if a third party sends crafted packets that happ
 
 ### Threat Model
 
-| Threat | Mitigation |
-|---|---|
-| Passive eavesdropping on LAN | AES-256-GCM encryption on all TCP payloads |
-| MITM (active) | Not mitigated — no PKI or certificate pinning. Trust is established per-connection on first contact. Future work: TOFU (trust-on-first-use) fingerprinting. |
-| Session hijacking | 32-byte random Session ID verified per packet |
-| OOM / DoS via giant packet | 100 MB payload length cap in `MessageBuffer` |
-| Replay attacks | GCM auth tag + unique nonces make replays detectable; no explicit sequence number replay window |
+| Threat                       | Mitigation                                                                                                                    |
+| :--------------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| Passive eavesdropping on LAN | AES-256-GCM encryption on all TCP payloads                                                                                    |
+| MITM (active)                | Not mitigated — no PKI or certificate pinning. Trust is established per-connection on first contact. Future work: TOFU (trust-on-first-use) fingerprinting. |
+| Session hijacking            | 32-byte random Session ID verified per packet                                                                                 |
+| OOM / DoS via giant packet   | 100 MB payload length cap in `MessageBuffer`                                                                                  |
+| Replay attacks               | GCM auth tag + unique nonces make replays detectable; no explicit sequence number replay window                               |
 
 ---
 
@@ -180,35 +186,35 @@ All TCP messages use a **custom length-prefixed binary protocol** with a fixed 4
 ### Header Layout
 
 ```
-Offset  Size   Field
-──────  ─────  ──────────────────────────────────────
-  0      1 B   PROTOCOL_VERSION  (currently: 0x01)
-  1      1 B   OPCODE
-  2      4 B   PAYLOAD_LENGTH    (Big Endian uint32)
-  6      4 B   SEQUENCE_NUM      (Big Endian uint32)
- 10     32 B   SESSION_ID
-─────────────────────────────────────────────────────
- 42      n B   PAYLOAD           (encrypted, length from header)
+Offset   Size   Field
+──────  ──────  ───────────────────────────────────────────────
+  0      1 B    PROTOCOL_VERSION  (currently: 0x01)
+  1      1 B    OPCODE
+  2      4 B    PAYLOAD_LENGTH    (Big Endian uint32)
+  6      4 B    SEQUENCE_NUM      (Big Endian uint32)
+ 10     32 B    SESSION_ID
+───────────────────────────────────────────────────────────────
+ 42      n B    PAYLOAD           (encrypted, length from header)
 ```
 
 Total message size = **42 + PAYLOAD_LENGTH** bytes.
 
 ### Opcodes
 
-| Opcode | Hex | Direction | Description |
-|---|---|---|---|
-| `HANDSHAKE_INIT` | `0x01` | Initiator → Responder | Public key exchange initiation |
+| Opcode           |  Hex   |       Direction       | Description                          |
+| :--------------- | :----: | :-------------------: | :----------------------------------- |
+| `HANDSHAKE_INIT` | `0x01` | Initiator → Responder | Public key exchange initiation       |
 | `HANDSHAKE_ACK`  | `0x02` | Responder → Initiator | Public key + session ID confirmation |
-| `PEER_ANNOUNCE`  | `0x10` | Internal / UDP | Peer presence (UDP, not TCP) |
-| `PEER_OFFLINE`   | `0x11` | Internal | Peer TTL expiry |
-| `CHAT_MESSAGE`   | `0x20` | Bidirectional | Encrypted chat message |
-| `FILE_OFFER`     | `0x30` | Sender → Receiver | File metadata offer |
-| `FILE_ACCEPT`    | `0x31` | Receiver → Sender | Accept file offer |
-| `FILE_REJECT`    | `0x32` | Receiver → Sender | Reject file offer |
-| `FILE_CHUNK`     | `0x33` | Sender → Receiver | Encrypted file data chunk |
-| `FILE_COMPLETE`  | `0x34` | Sender → Receiver | Transfer complete signal |
-| `TYPING_START`   | `0x40` | Bidirectional | Peer started typing |
-| `TYPING_STOP`    | `0x41` | Bidirectional | Peer stopped typing |
+| `PEER_ANNOUNCE`  | `0x10` |    Internal / UDP     | Peer presence (UDP, not TCP)         |
+| `PEER_OFFLINE`   | `0x11` |       Internal        | Peer TTL expiry                      |
+| `CHAT_MESSAGE`   | `0x20` |     Bidirectional     | Encrypted chat message               |
+| `FILE_OFFER`     | `0x30` |   Sender → Receiver   | File metadata offer                  |
+| `FILE_ACCEPT`    | `0x31` |   Receiver → Sender   | Accept file offer                    |
+| `FILE_REJECT`    | `0x32` |   Receiver → Sender   | Reject file offer                    |
+| `FILE_CHUNK`     | `0x33` |   Sender → Receiver   | Encrypted file data chunk            |
+| `FILE_COMPLETE`  | `0x34` |   Sender → Receiver   | Transfer complete signal             |
+| `TYPING_START`   | `0x40` |     Bidirectional     | Peer started typing                  |
+| `TYPING_STOP`    | `0x41` |     Bidirectional     | Peer stopped typing                  |
 
 ### Stream Framing
 
@@ -352,12 +358,12 @@ The central orchestrator. It:
 
 ### `server/src/crypto.js`
 
-| Export | Description |
-|---|---|
-| `generateKeyPair()` | Generates an ephemeral X25519 key pair (DER format) |
-| `deriveSharedSecret(privKey, peerPubKey)` | ECDH → 32-byte shared secret |
-| `encryptMessage(sessionKey, plaintext)` | AES-256-GCM encrypt. Returns `[nonce(12B) + ciphertext + authTag(16B)]` |
-| `decryptMessage(sessionKey, encryptedPayload)` | AES-256-GCM decrypt. Throws on auth failure |
+| Export                                         | Description                                                             |
+| :--------------------------------------------- | :---------------------------------------------------------------------- |
+| `generateKeyPair()`                            | Generates an ephemeral X25519 key pair (DER format)                     |
+| `deriveSharedSecret(privKey, peerPubKey)`      | ECDH → 32-byte shared secret                                            |
+| `encryptMessage(sessionKey, plaintext)`        | AES-256-GCM encrypt. Returns `[nonce(12B) + ciphertext + authTag(16B)]` |
+| `decryptMessage(sessionKey, encryptedPayload)` | AES-256-GCM decrypt. Throws on auth failure                             |
 
 ### `server/src/network/PeerDiscovery.js`
 
@@ -420,21 +426,21 @@ Sidebar listing all active LAN peers. Updates reactively on `PEER_ANNOUNCE` / `P
 
 ## Known Limitations
 
-| Limitation | Detail |
-|---|---|
-| **No MITM protection** | Key exchange has no PKI or certificate pinning. A network-level attacker could intercept the ECDH handshake. Future fix: TOFU fingerprint display + user verification. |
-| **Chat history keyed by IP** | If a peer's IP changes (DHCP renewal), their chat history is orphaned. A proper fix requires a persistent identity layer (e.g., public key fingerprint as peer ID). |
-| **Single frontend instance** | The proxy tracks only one active WebSocket client. Multiple browser tabs on the same machine will compete; only the last one to connect is "active". |
-| **No message delivery confirmation** | Messages are sent over TCP (so they arrive if the connection is live), but there is no application-level ACK or read receipt. |
-| **File transfer lives in RAM** | The receiver assembles the entire file in browser memory before downloading. Very large files (multiple GB) may exhaust RAM. |
+| Limitation                           | Detail                                                                                                                                                   |
+| :----------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No MITM protection**               | Key exchange has no PKI or certificate pinning. A network-level attacker could intercept the ECDH handshake. Future fix: TOFU fingerprint display + user verification. |
+| **Chat history keyed by IP**         | If a peer's IP changes (DHCP renewal), their chat history is orphaned. A proper fix requires a persistent identity layer (e.g., public key fingerprint as peer ID).    |
+| **Single frontend instance**         | The proxy tracks only one active WebSocket client. Multiple browser tabs on the same machine will compete; only the last one to connect is "active".   |
+| **No message delivery confirmation** | Messages are sent over TCP (so they arrive if the connection is live), but there is no application-level ACK or read receipt.                           |
+| **File transfer lives in RAM**       | The receiver assembles the entire file in browser memory before downloading. Very large files (multiple GB) may exhaust RAM.                            |
 
 ---
 
 ## Port Reference
 
-| Port | Protocol | Purpose |
-|---|---|---|
-| `3000` | HTTP / WS (Vite HMR) | React frontend dev server |
-| `9000` | TCP | Encrypted peer-to-peer messaging and file transfer |
-| `9001` | UDP | LAN peer discovery broadcasts |
-| `9002` | WebSocket | Local proxy ↔ browser bridge (localhost only) |
+|  Port  | Protocol             | Purpose                                            |
+| :----: | :------------------- | :------------------------------------------------- |
+| `3000` | HTTP / WS (Vite HMR) | React frontend dev server                          |
+| `9000` | TCP                  | Encrypted peer-to-peer messaging and file transfer |
+| `9001` | UDP                  | LAN peer discovery broadcasts                      |
+| `9002` | WebSocket            | Local proxy ↔ browser bridge (localhost only)      |
