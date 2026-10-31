@@ -1,7 +1,11 @@
+<div align="center">
+
 # LocalLink
 
 > **Secure, zero-configuration peer-to-peer chat and file transfer for your local network.**  
 > No cloud. No accounts. No internet. Just your LAN.
+
+<br>
 
 ![Tech](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)
 ![Tech](https://img.shields.io/badge/Node.js-TCP%20Proxy-339933?style=flat-square&logo=node.js)
@@ -9,23 +13,21 @@
 ![Protocol](https://img.shields.io/badge/Protocol-Custom%20Binary%20(42B)-22d3ee?style=flat-square)
 ![Offline](https://img.shields.io/badge/Offline-Store%20%26%20Forward-10b981?style=flat-square)
 
+</div>
+
 ---
 
 ## Table of Contents
 
-1. [What is LocalLink?](#what-is-locallink)
-2. [Features](#features)
-3. [Architecture Overview](#architecture-overview)
-4. [Security & Encryption (E2EE)](#security--encryption-e2ee)
-5. [Binary Protocol Specification](#binary-protocol-specification)
-6. [Store-and-Forward Outbox & Offline Messaging](#store-and-forward-outbox--offline-messaging)
-7. [File Transfer Protocol & Safety Controls](#file-transfer-protocol--safety-controls)
-8. [Project Structure](#project-structure)
-9. [Getting Started & Installation](#getting-started--installation)
-10. [Running the Application](#running-the-application)
-11. [Module Reference](#module-reference)
-12. [Known Limitations](#known-limitations)
-13. [Port Reference](#port-reference)
+|   #    | Section                                                                                      |   #    | Section                                                                |
+| :----: | :------------------------------------------------------------------------------------------- | :----: | :--------------------------------------------------------------------- |
+| **01** | [What is LocalLink?](#what-is-locallink)                                                     | **08** | [Project Structure](#project-structure)                                |
+| **02** | [Features](#features)                                                                        | **09** | [Getting Started & Installation](#getting-started--installation)        |
+| **03** | [Architecture Overview](#architecture-overview)                                              | **10** | [Running the Application](#running-the-application)                    |
+| **04** | [Security & Encryption (E2EE)](#security--encryption-e2ee)                                    | **11** | [Module Reference](#module-reference)                                  |
+| **05** | [Binary Protocol Specification](#binary-protocol-specification)                              | **12** | [Known Limitations](#known-limitations)                                |
+| **06** | [Store-and-Forward Outbox & Offline Messaging](#store-and-forward-outbox--offline-messaging) | **13** | [Port Reference](#port-reference)                                      |
+| **07** | [File Transfer Protocol & Safety Controls](#file-transfer-protocol--safety-controls)          |        |                                                                        |
 
 ---
 
@@ -48,49 +50,51 @@ The LAN is treated as a **hostile network**. All payloads are encrypted before t
 
 ## Features
 
-| Feature | Details |
-|---|---|
-| 🔍 **Subnet Peer Discovery** | UDP broadcast across calculated subnet masks (e.g. `10.97.67.255`, `255.255.255.255`) every 2 seconds. |
-| ⚖️ **Deterministic P2P Tie-Breaker** | Numerical IP comparison prevents simultaneous connection collisions and socket disconnect loops. |
-| 💬 **End-to-End Encrypted Chat** | Ephemeral X25519 key exchange + AES-256-GCM with unique 96-bit nonces per packet. |
-| 🕒 **Store-and-Forward Outbox** | Messages typed while a peer is offline queue with `🕒` and automatically flush when the peer reconnects. |
-| ✓ **Genuine Delivery Acks** | Single checkmark (`✓`) is confirmed strictly when the proxy writes the encrypted packet into the TCP socket. |
-| 📥 **Inbox Buffering on Reload** | Incoming messages received while the React UI is reconnecting are buffered and delivered immediately on UI mount. |
-| 👥 **Persistent Offline Peers** | Offline peers remain in the sidebar with an idle dot and "Offline" indicator; contact list persists across reloads. |
-| 🔎 **Smart Search & Direct IP Connect** | Search contacts or enter any campus/LAN IP directly with keyboard shortcut (`Ctrl+K` or `/`). |
-| 📎 **Controlled File Transfers** | 256 KB chunk streaming with progress bars, Accept/Reject prompts, and browser memory assembly. |
-| 🛡️ **50 MB Campus Safety Limit** | Enforces a strict 50 MB limit per file to conserve local RAM and network buffers. |
-| ✕ **Offline File Transfer Guard** | Attachment button disables when peer is offline; failed or blocked transfers display a bold red cross (`✕`). |
-| 🚫 **0-Byte Ghost Download Guard** | Synchronous ref tracking prevents React 18 Strict Mode double-invocation from creating empty ghost files. |
-| 🔒 **E2EE Security Inspector** | Visual verification modal displaying current session key status, algorithm details, and peer endpoints. |
-| 🗑️ **Single-Chat History Clearing** | Trash button in header with confirmation modal clears history for that specific peer only. |
-| ⌨️ **Live Typing Indicators** | Real-time "typing…" bubbles debounced to avoid network spam. |
-| 🔔 **Audio Notification Chimes** | Synthesized dual-tone sine wave chime via Web Audio API on incoming messages. |
-| 🌓 **Light & Dark Theme** | Instant theme switcher persisted to `localStorage`. |
+| Feature                                | Details                                                                                                              |
+| :------------------------------------- | :------------------------------------------------------------------------------------------------------------------- |
+| 🔍 **Subnet Peer Discovery**           | UDP broadcast across calculated subnet masks (e.g. `10.97.67.255`, `255.255.255.255`) every 2 seconds.               |
+| ⚖️ **Deterministic P2P Tie-Breaker**   | Numerical IP comparison prevents simultaneous connection collisions and socket disconnect loops.                     |
+| 💬 **End-to-End Encrypted Chat**       | Ephemeral X25519 key exchange + AES-256-GCM with unique 96-bit nonces per packet.                                   |
+| 🕒 **Store-and-Forward Outbox**        | Messages typed while a peer is offline queue with `🕒` and automatically flush when the peer reconnects.              |
+| ✓ **Genuine Delivery Acks**            | Single checkmark (`✓`) is confirmed strictly when the proxy writes the encrypted packet into the TCP socket.         |
+| 📥 **Inbox Buffering on Reload**        | Incoming messages received while the React UI is reconnecting are buffered and delivered immediately on UI mount.     |
+| 👥 **Persistent Offline Peers**        | Offline peers remain in the sidebar with an idle dot and "Offline" indicator; contact list persists across reloads.   |
+| 🔎 **Smart Search & Direct IP Connect** | Search contacts or enter any campus/LAN IP directly with keyboard shortcut (`Ctrl+K` or `/`).                        |
+| 📎 **Controlled File Transfers**       | 256 KB chunk streaming with progress bars, Accept/Reject prompts, and browser memory assembly.                       |
+| 🛡️ **50 MB Campus Safety Limit**       | Enforces a strict 50 MB limit per file to conserve local RAM and network buffers.                                    |
+| ✕ **Offline File Transfer Guard**      | Attachment button disables when peer is offline; failed or blocked transfers display a bold red cross (`✕`).         |
+| 🚫 **0-Byte Ghost Download Guard**     | Synchronous ref tracking prevents React 18 Strict Mode double-invocation from creating empty ghost files.            |
+| 🔒 **E2EE Security Inspector**         | Visual verification modal displaying current session key status, algorithm details, and peer endpoints.             |
+| 🗑️ **Single-Chat History Clearing**     | Trash button in header with confirmation modal clears history for that specific peer only.                           |
+| ⌨️ **Live Typing Indicators**          | Real-time "typing…" bubbles debounced to avoid network spam.                                                         |
+| 🔔 **Audio Notification Chimes**       | Synthesized dual-tone sine wave chime via Web Audio API on incoming messages.                                        |
+| 🌓 **Light & Dark Theme**              | Instant theme switcher persisted to `localStorage`.                                                                  |
 
 ---
 
 ## Architecture Overview
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                   Your Machine                         │
-│                                                        │
-│  ┌─────────────────┐        ┌────────────────────────┐ │
-│  │  React Frontend │◄──WS──►│  Node.js Proxy Server  │ │
-│  │  (Vite, :3000)  │        │  (:9002 WS)            │ │
-│  └─────────────────┘        │  (:9000 TCP)           │ │
-│                             │  (:9001 UDP)           │ │
-│                             └────────┬───────────────┘ │
-└──────────────────────────────────────┼─────────────────┘
-                                       │ LAN / Wi-Fi / Hotspot
-                    ┌──────────────────┼──────────────────┐
-                    │                  │                   │
-             TCP :9000          UDP :9001 broadcast     TCP :9000
-                    │                  │                   │
-              ┌─────┴────┐       ┌─────┴────┐       ┌─────┴────┐
-              │  Peer A  │       │  Peer B  │       │  Peer C  │
-              └──────────┘       └──────────┘       └──────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           Your Machine                           │
+│                                                                  │
+│   ┌────────────────────────┐        ┌────────────────────────┐   │
+│   │     React Frontend     │◄──WS──►│  Node.js Proxy Server  │   │
+│   │     (Vite, :3000)      │        │  (:9002 WS)            │   │
+│   │                        │        │  (:9000 TCP)           │   │
+│   │                        │        │  (:9001 UDP)           │   │
+│   └────────────────────────┘        └───────────┬────────────┘   │
+│                                                 │                │
+│                                 ┌───────────────┘                │
+└─────────────────────────────────┼────────────────────────────────┘
+                                  │ LAN / Wi-Fi / Hotspot
+                  ┌───────────────┼───────────────┐
+                  │               │               │
+              TCP :9000  UDP :9001 broadcast  TCP :9000
+                  │               │               │
+            ┌─────┴─────┐   ┌─────┴─────┐   ┌─────┴─────┐
+            │  Peer A   │   │  Peer B   │   │  Peer C   │
+            └───────────┘   └───────────┘   └───────────┘
 ```
 
 ### Data Flow
@@ -138,15 +142,16 @@ Both peers compute the identical **32-byte shared secret** using `crypto.diffieH
 ```
 Initiator (Higher IP)                  Responder (Lower IP)
     │                                          │
-    │──────── HANDSHAKE_INIT (pubKey) ────────►│
+    │───────── HANDSHAKE_INIT (pubKey) ────────►│
     │                                          │  Computes shared secret
     │                                          │  Generates 32B random Session ID
-    │◄─── HANDSHAKE_ACK (pubKey, sessionId) ───│
+    │                                          │
+    │◄──── HANDSHAKE_ACK (pubKey, sessionId) ──│
     │                                          │
     │  Computes shared secret                  │
     │  Stores Session ID                       │
     │                                          │
-    │════════════ AES-256-GCM Encrypted ═══════│
+    │══════════ AES-256-GCM Encrypted ═════════│
 ```
 
 - **Ephemeral Keys**: Key pairs are generated fresh per connection. Compromising one session key does not compromise past or future sessions.
@@ -188,39 +193,39 @@ All TCP traffic uses a custom length-prefixed binary protocol with a fixed **42-
 ### Header Layout
 
 ```
-Offset  Size   Field             Type / Description
-──────  ─────  ────────────────  ──────────────────────────────────────────
-  0      1 B   PROTOCOL_VERSION  Version byte (current: 0x01)
-  1      1 B   OPCODE            Operation identifier (e.g. 0x20 for CHAT)
-  2      4 B   PAYLOAD_LENGTH    Big-Endian uint32 (length of following payload)
-  6      4 B   SEQUENCE_NUM      Big-Endian uint32 timestamp/sequence counter
- 10     32 B   SESSION_ID        32-byte cryptographic session identifier
-───────────────────────────────────────────────────────────────────────────
- 42      n B   PAYLOAD           Encrypted payload (length specified in header)
+Offset   Size   Field             Type / Description
+──────  ──────  ────────────────  ───────────────────────────────────────────
+  0      1 B    PROTOCOL_VERSION  Version byte (current: 0x01)
+  1      1 B    OPCODE            Operation identifier (e.g. 0x20 for CHAT)
+  2      4 B    PAYLOAD_LENGTH    Big-Endian uint32 (length of following payload)
+  6      4 B    SEQUENCE_NUM      Big-Endian uint32 timestamp/sequence counter
+ 10     32 B    SESSION_ID        32-byte cryptographic session identifier
+─────────────────────────────────────────────────────────────────────────────
+ 42      n B    PAYLOAD           Encrypted payload (length specified in header)
 ```
 
 Total packet size = **42 + PAYLOAD_LENGTH** bytes.
 
 ### Defined Opcodes
 
-| Opcode | Hex | Flow | Purpose |
-|---|---|---|---|
-| `HANDSHAKE_INIT` | `0x01` | Initiator → Responder | Ephemeral X25519 public key exchange initiation |
-| `HANDSHAKE_ACK`  | `0x02` | Responder → Initiator | Public key acknowledgment + Session ID confirmation |
-| `PEER_ANNOUNCE`  | `0x10` | Bidirectional | Direct encrypted username exchange after handshake |
-| `PEER_OFFLINE`   | `0x11` | Internal Proxy | Emitted when peer UDP broadcast expires (15s TTL) |
-| `CHAT_MESSAGE`   | `0x20` | Bidirectional | Encrypted UTF-8 text message |
-| `FILE_OFFER`     | `0x30` | Sender → Receiver | File transfer request with name, size, mimeType, transferId |
-| `FILE_ACCEPT`    | `0x31` | Receiver → Sender | Approval to begin streaming file chunks |
-| `FILE_REJECT`    | `0x32` | Receiver → Sender | Rejection of file transfer offer |
-| `FILE_CHUNK`     | `0x33` | Sender → Receiver | Encrypted 256 KB file chunk with index and totalChunks |
-| `FILE_COMPLETE`  | `0x34` | Sender → Receiver | Notification that all file chunks have finished sending |
-| `TYPING_START`   | `0x40` | Bidirectional | Live notification that user started typing |
-| `TYPING_STOP`    | `0x41` | Bidirectional | Live notification that user stopped typing |
+| Opcode           |  Hex   |         Flow          | Purpose                                                     |
+| :--------------- | :----: | :-------------------: | :---------------------------------------------------------- |
+| `HANDSHAKE_INIT` | `0x01` | Initiator → Responder | Ephemeral X25519 public key exchange initiation             |
+| `HANDSHAKE_ACK`  | `0x02` | Responder → Initiator | Public key acknowledgment + Session ID confirmation         |
+| `PEER_ANNOUNCE`  | `0x10` |     Bidirectional     | Direct encrypted username exchange after handshake          |
+| `PEER_OFFLINE`   | `0x11` |    Internal Proxy     | Emitted when peer UDP broadcast expires (15s TTL)           |
+| `CHAT_MESSAGE`   | `0x20` |     Bidirectional     | Encrypted UTF-8 text message                                |
+| `FILE_OFFER`     | `0x30` |   Sender → Receiver   | File transfer request with name, size, mimeType, transferId |
+| `FILE_ACCEPT`    | `0x31` |   Receiver → Sender   | Approval to begin streaming file chunks                     |
+| `FILE_REJECT`    | `0x32` |   Receiver → Sender   | Rejection of file transfer offer                            |
+| `FILE_CHUNK`     | `0x33` |   Sender → Receiver   | Encrypted 256 KB file chunk with index and totalChunks      |
+| `FILE_COMPLETE`  | `0x34` |   Sender → Receiver   | Notification that all file chunks have finished sending     |
+| `TYPING_START`   | `0x40` |     Bidirectional     | Live notification that user started typing                  |
+| `TYPING_STOP`    | `0x41` |     Bidirectional     | Live notification that user stopped typing                  |
 
 ### Stream Framing & MessageBuffer
 
-Because TCP is a continuous byte stream, packets may be fragmented or coalesced. [`MessageBuffer.js`](file:///C:/Users/goela/localLink/server/src/protocol/MessageBuffer.js) buffers raw incoming bytes, reads `PAYLOAD_LENGTH` from offset 2, and enforces a **100 MB maximum payload cap** for memory safety before emitting a complete `message` event.
+Because TCP is a continuous byte stream, packets may be fragmented or coalesced. [`MessageBuffer.js`](server/src/protocol/MessageBuffer.js) buffers raw incoming bytes, reads `PAYLOAD_LENGTH` from offset 2, and enforces a **100 MB maximum payload cap** for memory safety before emitting a complete `message` event.
 
 ---
 
@@ -439,20 +444,20 @@ npm run build --workspace=client
 
 ## Known Limitations
 
-| Area | Current State & Behavior |
-|---|---|
-| **Identity Verification** | Ephemeral keys provide forward secrecy but lack centralized PKI. Active MITM on local network is not cryptographically authenticated without manual fingerprint verification. |
-| **IP-Keyed History** | Chat histories are organized by peer IP address. If a DHCP lease changes a peer's IP address, past history remains attached to the previous IP. |
-| **In-Memory File Assembly** | Incoming file chunks are assembled as a `Blob` in browser RAM before disk write. The 50 MB safety limit protects against memory exhaustion. |
+| Area                          | Current State & Behavior                                                                                                                                                 |
+| :---------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Identity Verification**     | Ephemeral keys provide forward secrecy but lack centralized PKI. Active MITM on local network is not cryptographically authenticated without manual fingerprint verification. |
+| **IP-Keyed History**          | Chat histories are organized by peer IP address. If a DHCP lease changes a peer's IP address, past history remains attached to the previous IP.                          |
+| **In-Memory File Assembly**   | Incoming file chunks are assembled as a `Blob` in browser RAM before disk write. The 50 MB safety limit protects against memory exhaustion.                              |
 | **Inter-VLAN Campus Routers** | Some enterprise / university networks isolate subnets with firewalls that drop all inter-student TCP/UDP traffic between hostel blocks. Hotspot or same-router connection is recommended in those environments. |
 
 ---
 
 ## Port Reference
 
-| Port | Protocol | Scope | Description |
-|---|---|---|---|
-| `3000` | HTTP / WS | Localhost | Vite development server hosting the React UI |
-| `9000` | TCP | LAN (`0.0.0.0`) | Raw length-prefixed encrypted peer-to-peer transport |
-| `9001` | UDP | LAN Broadcast | Subnet peer discovery beacons |
-| `9002` | WebSocket | Localhost (`127.0.0.1`) | Local IPC bridge between browser and Node.js proxy |
+|  Port  | Protocol  |         Scope         | Description                                          |
+| :----: | :-------- | :-------------------: | :--------------------------------------------------- |
+| `3000` | HTTP / WS |       Localhost       | Vite development server hosting the React UI         |
+| `9000` | TCP       |    LAN (`0.0.0.0`)    | Raw length-prefixed encrypted peer-to-peer transport |
+| `9001` | UDP       |     LAN Broadcast     | Subnet peer discovery beacons                        |
+| `9002` | WebSocket | Localhost (`127.0.0.1`) | Local IPC bridge between browser and Node.js proxy   |
